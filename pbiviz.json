@@ -1,0 +1,26 @@
+{
+    "visual": {
+        "name": "pbiLabelMap",
+        "displayName": "Label Map",
+        "guid": "pbiLabelMap7379A3103AC7452ABE93F1A12B992918",
+        "visualClassName": "Visual",
+        "version": "1.4.0.0",
+        "description": "Leaflet point map that prints any value (measure or column) on each point. Plot by latitude/longitude, color by category, size by measure.",
+        "supportUrl": "https://github.com/alijohnzy/pbi-label-map/issues",
+        "gitHubUrl": "https://github.com/alijohnzy/pbi-label-map"
+    },
+    "apiVersion": "5.11.1",
+    "author": {
+        "name": "Can Aygin",
+        "email": "canaygin56@gmail.com"
+    },
+    "assets": {
+        "icon": "assets/icon.png"
+    },
+    "externalJS": null,
+    "style": "style/visual.less",
+    "capabilities": "capabilities.json",
+    "dependencies": null,
+    "stringResources": [],
+    "version": "1.4.0.0"
+}

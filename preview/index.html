@@ -1,0 +1,164 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="visual.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #fff; font: 13px -apple-system, "Segoe UI", sans-serif; }
+  body { display: flex; flex-direction: column; }
+  .bar { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 10px 14px; border-bottom: 1px solid #e5e7eb; }
+  .hint { color: #6b7280; }
+  #host { flex: 1; min-height: 0; position: relative; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <label>Base map
+    <select id="basemap">
+      <option value="cartoLight">Light (CARTO)</option>
+      <option value="cartoVoyager">Streets (CARTO Voyager)</option>
+      <option value="cartoDark">Dark (CARTO)</option>
+      <option value="osm">OpenStreetMap</option>
+      <option value="esriStreets">Streets (Esri)</option>
+      <option value="esriImagery">Satellite (Esri)</option>
+      <option value="outline">Offline outline</option>
+    </select>
+  </label>
+  <label>Label
+    <select id="content">
+      <option value="value">Value</option>
+      <option value="name">Name</option>
+      <option value="nameValue">Name: Value</option>
+      <option value="twoLines">Name and value (2 lines)</option>
+    </select>
+  </label>
+  <label>Position
+    <select id="position">
+      <option value="top">Above</option>
+      <option value="center">Inside bubble</option>
+      <option value="bottom">Below</option>
+      <option value="right">Right</option>
+      <option value="left">Left</option>
+    </select>
+  </label>
+  <label><input type="checkbox" id="bg" checked> Label background</label>
+  <label><input type="checkbox" id="overlap" checked> Hide overlapping labels</label>
+  <span class="hint">Sample data only. This page mimics Power BI's host so you can check tiles and labels in a normal browser.</span>
+</div>
+<div id="host"></div>
+<script>
+  window.powerbi = { visuals: { plugins: {} } };
+</script>
+<script src="visual.js"></script>
+<script>
+  const PALETTE = ["#118DFF", "#E66C37", "#6B007B", "#12239E", "#E044A7", "#744EC2"];
+  const paletteMap = {};
+  let paletteNext = 0;
+  window.__log = [];
+  const host = {
+    eventService: {
+      renderingStarted() {},
+      renderingFinished() { window.__rendered = (window.__rendered || 0) + 1; },
+      renderingFailed(o, e) { window.__err = e; }
+    },
+    createSelectionManager() {
+      let sel = [];
+      return {
+        select(id, multi) { sel = multi ? sel.concat([id]) : [id]; window.__log.push("select " + id.__row); return Promise.resolve(sel); },
+        clear() { sel = []; window.__log.push("clear"); return Promise.resolve(); },
+        getSelectionIds() { return sel; },
+        registerOnSelectCallback() {},
+        showContextMenu() { return Promise.resolve(); }
+      };
+    },
+    tooltipService: {
+      enabled: () => true,
+      show(o) { window.__tip = o; },
+      move() {},
+      hide() {}
+    },
+    colorPalette: {
+      isHighContrast: false,
+      foreground: { value: "#000" },
+      background: { value: "#fff" },
+      getColor(k) {
+        if (!(k in paletteMap)) paletteMap[k] = PALETTE[paletteNext++ % PALETTE.length];
+        return { value: paletteMap[k] };
+      }
+    },
+    createSelectionIdBuilder() {
+      let row = -1;
+      const b = {
+        withTable(t, i) { row = i; return b; },
+        createSelectionId() {
+          return { __row: row, equals: o => o.__row === row, getKey: () => String(row), includes: o => o.__row === row };
+        }
+      };
+      return b;
+    },
+    locale: "en-US",
+    hostCapabilities: { allowInteractions: true }
+  };
+
+  const rows = [
+    ["Winnipeg",      49.8954, -97.1385, "Prairies", 4820000, 412],
+    ["Brandon",       49.8485, -99.9501, "Prairies", 1730000, 151],
+    ["Regina",        50.4452, -104.6189, "Prairies", 3150000, 266],
+    ["Saskatoon",     52.1332, -106.6700, "Prairies", 3390000, 281],
+    ["Calgary",       51.0447, -114.0719, "Prairies", 2210000, 177],
+    ["Edmonton",      53.5461, -113.4938, "Prairies", 2640000, 203],
+    ["Lethbridge",    49.6935, -112.8418, "Prairies", 980000, 88],
+    ["Fargo",         46.8772, -96.7898, "US Midwest", 2950000, 240],
+    ["Grand Forks",   47.9253, -97.0329, "US Midwest", 1120000, 95],
+    ["Sioux Falls",   43.5446, -96.7311, "US Midwest", 2080000, 171],
+    ["Bismarck",      46.8083, -100.7837, "US Midwest", 1410000, 118],
+    ["Minot",         48.2325, -101.2963, "US Midwest", 760000, 62],
+    ["Des Moines",    41.5868, -93.6250, "US Midwest", 2430000, 198],
+    ["Omaha",         41.2565, -95.9345, "US Midwest", 1890000, 149],
+    ["Great Falls",   47.5053, -111.3008, "US West", 640000, 55],
+    ["Billings",      45.7833, -108.5007, "US West", 1270000, 101],
+    ["Spokane",       47.6588, -117.4260, "US West", 870000, 72],
+    ["Bad row",       null, null, "US West", 100, 1]
+  ];
+
+  const cols = [
+    { displayName: "Dealer", roles: { location: true }, type: { text: true } },
+    { displayName: "Latitude", roles: { latitude: true }, type: { numeric: true } },
+    { displayName: "Longitude", roles: { longitude: true }, type: { numeric: true } },
+    { displayName: "Region", roles: { legend: true }, type: { text: true } },
+    { displayName: "Sales", roles: { labelValue: true, tooltips: true }, type: { numeric: true }, format: "\\$#,0;(\\$#,0);\\$#,0" },
+    { displayName: "Units", roles: { size: true }, type: { numeric: true }, format: "#,0" }
+  ];
+
+  window.makeDataView = function (objects) {
+    return { metadata: { columns: cols, objects: objects || {} }, table: { columns: cols, rows } };
+  };
+
+  const element = document.getElementById("host");
+  const plugin = Object.values(window.powerbi.visuals.plugins)[0];
+  window.visual = plugin.create({ element, host });
+  window.doUpdate = function (objects, type) {
+    window.visual.update({
+      viewport: { width: element.clientWidth, height: element.clientHeight },
+      dataViews: [window.makeDataView(objects)],
+      type: type || 62
+    });
+  };
+
+  function fromControls() {
+    return {
+      map: { basemap: document.getElementById("basemap").value },
+      labels: {
+        content: document.getElementById("content").value,
+        position: document.getElementById("position").value,
+        background: document.getElementById("bg").checked,
+        avoidOverlap: document.getElementById("overlap").checked
+      }
+    };
+  }
+  document.querySelectorAll(".bar select, .bar input").forEach(el => el.addEventListener("change", () => window.doUpdate(fromControls())));
+  window.addEventListener("resize", () => window.doUpdate(fromControls(), 4));
+  window.doUpdate(fromControls());
+</script>
+</body>
+</html>

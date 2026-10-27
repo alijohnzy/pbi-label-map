@@ -1,0 +1,35 @@
+{
+  "name": "pbi-label-map",
+  "description": "Power BI custom visual: Leaflet map with value labels on each point",
+  "version": "1.4.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alijohnzy/pbi-label-map.git"
+  },
+  "license": "MIT",
+  "scripts": {
+    "pbiviz": "pbiviz",
+    "start": "pbiviz start",
+    "package": "pbiviz package --all-locales",
+    "lint": "npx eslint .",
+    "preview": "pbiviz package --all-locales && cp .tmp/drop/visual.js .tmp/drop/visual.css preview/"
+  },
+  "dependencies": {
+    "leaflet": "^1.9.4",
+    "powerbi-visuals-api": "5.11.1",
+    "powerbi-visuals-utils-formattingmodel": "6.0.4",
+    "powerbi-visuals-utils-formattingutils": "^7.0.0",
+    "topojson-client": "^3.1.0",
+    "world-atlas": "^2.0.2"
+  },
+  "devDependencies": {
+    "@types/geojson": "^7946.0.16",
+    "@types/leaflet": "^1.9.22",
+    "@types/topojson-client": "^3.1.5",
+    "@types/topojson-specification": "^1.0.5",
+    "@typescript-eslint/eslint-plugin": "^8.8.0",
+    "eslint": "^9.11.1",
+    "eslint-plugin-powerbi-visuals": "^1.0.0",
+    "typescript": "5.5.4"
+  }
+}

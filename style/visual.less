@@ -1,0 +1,146 @@
+.plm-root {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: "Segoe UI", wf_segoe-ui_normal, helvetica, arial, sans-serif;
+    --plm-font-size: 11px;
+    --plm-font-color: #1b1f24;
+    --plm-font-weight: 600;
+    --plm-label-bg: #ffffff;
+}
+
+.plm-map {
+    position: absolute;
+    inset: 0;
+    background: #f2f2f2;
+}
+
+.plm-ocean .plm-map {
+    background: #dfe8ef;
+}
+
+/* Value labels (Leaflet permanent tooltips restyled) */
+.plm-root .leaflet-tooltip.plm-label {
+    padding: 1px 5px;
+    border: none;
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
+    background: var(--plm-label-bg);
+    color: var(--plm-font-color);
+    font-size: var(--plm-font-size);
+    font-weight: var(--plm-font-weight);
+    line-height: 1.25;
+    text-align: center;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.plm-root .leaflet-tooltip.plm-label::before {
+    display: none;
+}
+
+.plm-nobg .leaflet-tooltip.plm-label {
+    background: transparent;
+    box-shadow: none;
+    text-shadow:
+        -1px -1px 0 var(--plm-label-bg), 1px -1px 0 var(--plm-label-bg),
+        -1px 1px 0 var(--plm-label-bg), 1px 1px 0 var(--plm-label-bg),
+        0 0 3px var(--plm-label-bg);
+}
+
+.plm-root .leaflet-tooltip.plm-label.plm-inside {
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
+    text-shadow: none;
+}
+
+/* Bubble text: a second text drawn inside each node */
+.plm-root .leaflet-tooltip.plm-bt {
+    padding: 0;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    font-size: var(--plm-bt-size, 11px);
+    font-weight: var(--plm-bt-weight, 600);
+    line-height: 1.1;
+    text-align: center;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.plm-root .leaflet-tooltip.plm-bt::before {
+    display: none;
+}
+
+.plm-grey .leaflet-tile-pane {
+    filter: grayscale(1);
+}
+
+.plm-legend {
+    background: rgba(255, 255, 255, 0.92);
+    border-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+    padding: 6px 8px;
+    font-size: 11px;
+    color: #1b1f24;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.plm-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    line-height: 18px;
+    white-space: nowrap;
+}
+
+.plm-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: none;
+}
+
+.plm-legend-more {
+    color: #6b7280;
+    margin-top: 2px;
+}
+
+.plm-notice {
+    display: none;
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 22px;
+    z-index: 1000;
+    padding: 6px 10px;
+    border-radius: 4px;
+    background: rgba(255, 248, 225, 0.96);
+    border: 1px solid #f0c36d;
+    color: #5c4400;
+    font-size: 11px;
+    pointer-events: none;
+}
+
+.plm-empty {
+    display: none;
+    position: absolute;
+    inset: 0;
+    z-index: 1001;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    text-align: center;
+    white-space: pre-line;
+    color: #4b5563;
+    font-size: 13px;
+    background: rgba(255, 255, 255, 0.85);
+    pointer-events: none;
+}
+
+.plm-root .leaflet-control-attribution {
+    font-size: 9px;
+}

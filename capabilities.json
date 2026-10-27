@@ -1,0 +1,426 @@
+{
+    "dataRoles": [
+        {
+            "displayName": "Location",
+            "name": "location",
+            "kind": "Grouping",
+            "description": "Address, city, postal code, state or country. Put several fields here (e.g. City, Province, Country) and they're combined. Rows that also have Latitude/Longitude use those instead."
+        },
+        {
+            "displayName": "Latitude",
+            "name": "latitude",
+            "kind": "Grouping",
+            "requiredTypes": [
+                {
+                    "numeric": true
+                },
+                {
+                    "integer": true
+                }
+            ],
+            "preferredTypes": [
+                {
+                    "geography": {
+                        "latitude": true
+                    }
+                }
+            ],
+            "description": "Optional. Overrides Location for rows that have it."
+        },
+        {
+            "displayName": "Longitude",
+            "name": "longitude",
+            "kind": "Grouping",
+            "requiredTypes": [
+                {
+                    "numeric": true
+                },
+                {
+                    "integer": true
+                }
+            ],
+            "preferredTypes": [
+                {
+                    "geography": {
+                        "longitude": true
+                    }
+                }
+            ],
+            "description": "Optional. Overrides Location for rows that have it."
+        },
+        {
+            "displayName": "Legend",
+            "name": "legend",
+            "kind": "Grouping"
+        },
+        {
+            "displayName": "Size",
+            "name": "size",
+            "kind": "Measure"
+        },
+        {
+            "displayName": "Label value",
+            "name": "labelValue",
+            "kind": "Measure",
+            "description": "The value printed on each point. A measure or any column (use First/Last for text)."
+        },
+        {
+            "displayName": "Tooltips",
+            "name": "tooltips",
+            "kind": "Measure"
+        }
+    ],
+    "dataViewMappings": [
+        {
+            "conditions": [
+                {
+                    "location": {
+                        "max": 5
+                    },
+                    "latitude": {
+                        "max": 1
+                    },
+                    "longitude": {
+                        "max": 1
+                    },
+                    "labelValue": {
+                        "max": 1
+                    },
+                    "size": {
+                        "max": 1
+                    },
+                    "legend": {
+                        "max": 1
+                    }
+                }
+            ],
+            "table": {
+                "rows": {
+                    "select": [
+                        {
+                            "for": {
+                                "in": "location"
+                            }
+                        },
+                        {
+                            "for": {
+                                "in": "latitude"
+                            }
+                        },
+                        {
+                            "for": {
+                                "in": "longitude"
+                            }
+                        },
+                        {
+                            "for": {
+                                "in": "legend"
+                            }
+                        },
+                        {
+                            "for": {
+                                "in": "labelValue"
+                            }
+                        },
+                        {
+                            "for": {
+                                "in": "size"
+                            }
+                        },
+                        {
+                            "for": {
+                                "in": "tooltips"
+                            }
+                        }
+                    ],
+                    "dataReductionAlgorithm": {
+                        "top": {
+                            "count": 30000
+                        }
+                    }
+                }
+            }
+        }
+    ],
+    "objects": {
+        "map": {
+            "properties": {
+                "basemap": {
+                    "type": {
+                        "enumeration": []
+                    }
+                },
+                "autoFit": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "zoomControl": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "wheelZoom": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "greyscale": {
+                    "type": {
+                        "bool": true
+                    }
+                }
+            }
+        },
+        "bubbles": {
+            "properties": {
+                "fill": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "radius": {
+                    "type": {
+                        "numeric": true
+                    }
+                },
+                "minRadius": {
+                    "type": {
+                        "numeric": true
+                    }
+                },
+                "maxRadius": {
+                    "type": {
+                        "numeric": true
+                    }
+                },
+                "opacity": {
+                    "type": {
+                        "numeric": true
+                    }
+                },
+                "strokeColor": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "strokeWidth": {
+                    "type": {
+                        "numeric": true
+                    }
+                }
+            }
+        },
+        "labels": {
+            "properties": {
+                "show": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "content": {
+                    "type": {
+                        "enumeration": []
+                    }
+                },
+                "position": {
+                    "type": {
+                        "enumeration": []
+                    }
+                },
+                "displayUnits": {
+                    "type": {
+                        "formatting": {
+                            "labelDisplayUnits": true
+                        }
+                    }
+                },
+                "decimals": {
+                    "type": {
+                        "enumeration": []
+                    }
+                },
+                "fontSize": {
+                    "type": {
+                        "formatting": {
+                            "fontSize": true
+                        }
+                    }
+                },
+                "fontColor": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "bold": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "background": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "backgroundColor": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "avoidOverlap": {
+                    "type": {
+                        "bool": true
+                    }
+                }
+            }
+        },
+        "legend": {
+            "properties": {
+                "show": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "position": {
+                    "type": {
+                        "enumeration": []
+                    }
+                }
+            }
+        },
+        "geocoding": {
+            "properties": {
+                "provider": {
+                    "type": {
+                        "enumeration": []
+                    }
+                },
+                "azureKey": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "countries": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "cache": {
+                    "type": {
+                        "text": true
+                    }
+                }
+            }
+        },
+        "services": {
+            "properties": {
+                "azureKey": {
+                    "type": {
+                        "text": true
+                    }
+                },
+                "cartoKey": {
+                    "type": {
+                        "text": true
+                    }
+                }
+            }
+        },
+        "bubbleText": {
+            "properties": {
+                "show": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "content": {
+                    "type": {
+                        "enumeration": []
+                    }
+                },
+                "displayUnits": {
+                    "type": {
+                        "formatting": {
+                            "labelDisplayUnits": true
+                        }
+                    }
+                },
+                "decimals": {
+                    "type": {
+                        "enumeration": []
+                    }
+                },
+                "fontSize": {
+                    "type": {
+                        "formatting": {
+                            "fontSize": true
+                        }
+                    }
+                },
+                "autoColor": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "fontColor": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "bold": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "fitBubble": {
+                    "type": {
+                        "bool": true
+                    }
+                }
+            }
+        }
+    },
+    "tooltips": {
+        "supportedTypes": {
+            "default": true,
+            "canvas": true
+        },
+        "roles": [
+            "tooltips"
+        ]
+    },
+    "supportsMultiVisualSelection": true,
+    "privileges": [
+        {
+            "name": "WebAccess",
+            "essential": false,
+            "parameters": [
+                "https://*.basemaps.cartocdn.com",
+                "https://*.openstreetmap.org",
+                "https://*.arcgisonline.com",
+                "https://atlas.microsoft.com",
+                "https://*.atlas.microsoft.com"
+            ]
+        }
+    ]
+}
