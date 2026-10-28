@@ -46,7 +46,10 @@ Fields with a data category (City, State or Province, Postal Code, Country, Addr
 **State and ZIP checks.** The visual reads the country, state/province (`TX`, `Texas`, `AB`), US ZIP and Canadian postal code out of each Location first:
 - A result from OpenStreetMap that lands in a different state or province than the row says is rejected, so "Paris, TX" can't end up in Paris, Maine. The country the row names is also passed to the lookup.
 - **US ZIP codes** are placed at the ZIP's centre from a bundled table of about 42,000 ZIPs, with no lookup, when the Location has nothing more specific than the town (e.g. `US TX 79035`, `Friona, TX 79035`). With a street address the address is looked up, and kept only if it's within 80 km of the ZIP's centre. Tooltips say "Placed at: ZIP code ... area".
-- ZIPs are also recognized as ZIP+4 without the dash (`561751234`) and without a lost leading zero (`2134` for `02134`, common in Excel exports) when they come after the state.
+- The number right after the state is read generously: ZIP+4 without the dash (`561751234`), a lost leading zero (`2134` for `02134`, common in Excel exports) and an extra digit (`561756` as `56175`). Tooltips show what it was read from.
+- Each comma-separated part is read as country, state, ZIP, street, town or PO box. PO boxes, rural routes and unit numbers (`PO Box 249`, `P. O. Box 251`, `RR 2 Site 5 Comp 10`, `Suite 100`) are left out of lookups. Without a town, a street alone isn't looked up: the row goes to its ZIP or postal-area centre, which is closer than a guess at "80th Ave" somewhere in the state.
+- State names inside street names (`311 NW California Street`) and the direction `NE` (`123 Main St NE`) aren't read as states.
+- **ZIP in another state** (`US, TX, 54214` — 54214 is in Wisconsin): with a town, the town is looked up and the ZIP ignored; without one the row isn't placed, and the yellow note lists it so the data can be fixed.
 - A bare `CA` means Canada next to a province or postal code, and California next to `US` or a California ZIP.
 
 **Canadian postal codes.** Codes typed with a letter O for zero (`TOJ 3EO`) are read as `T0J 3E0`. OpenStreetMap has almost no Canadian postal codes (Canada Post owns that data), so with OpenStreetMap:

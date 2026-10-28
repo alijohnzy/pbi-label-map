@@ -2,54 +2,49 @@
 
 /**
  * Reads what a Location already tells us before any lookup: country, state/province,
- * a US ZIP or Canadian postal code, and whether there's a street address.
- * The visual uses this to place ZIP/postal-only rows from bundled tables, and to reject
- * geocoder results that land in the wrong state or far from the row's ZIP/postal area.
+ * a US ZIP or Canadian postal code, a street, a town, and PO boxes to leave out.
+ * The visual uses this to place rows from the bundled ZIP/postal tables when a lookup can't
+ * do better, and to reject geocoder results in the wrong state or far from the ZIP/postal area.
  */
 
 import { CanadianPostal, findCanadianPostal, fsaCentre } from "./postal";
 import { zipCentre, zipState } from "./usZip";
-import { Region, countryInText, regionByIso, regionCandidates, regionFromField } from "./regions";
+import { Region, RegionCandidate, countryInText, regionByIso, regionCandidates, regionFromField } from "./regions";
 
 export interface PlaceInfo {
     country: "US" | "CA" | "";
     region: Region | null;
-    /** US ZIP in the text that agrees with the state, with its centre */
-    zip: { code: string; at: [number, number] } | null;
+    /** US ZIP that agrees with the state, with its centre; `read` is the original when it was mangled ("561756") */
+    zip: { code: string; at: [number, number]; read?: string } | null;
+    /** The number right after the state is a real ZIP, but in another state ("US, TX, 54214" is in WI) */
+    zipConflict: { code: string; state: string } | null;
     /** Canadian postal code and its postal-area centre */
     ca: CanadianPostal | null;
     caCentre: [number, number] | null;
-    /** A number other than the ZIP/postal code, e.g. "123 Main St" or "Hwy 9" */
+    /** Has a street address: a house number or a street word ("123 Main St", "Hwy 9", "NW California Street") */
     street: boolean;
-    /** Nothing but the ZIP, state and country, e.g. "US TX 79035" */
-    zipOnly: boolean;
+    /** Has a place name that isn't the state, country, code or PO box ("Friona", "Brooks") */
+    town: boolean;
+    /** Text to look up: PO boxes and unit numbers removed, a mangled ZIP written properly */
+    query: string;
+    /** The same without the ZIP/postal code (OpenStreetMap doesn't know Canadian ones; a conflicting ZIP misleads) */
+    queryNoCode: string;
 }
 
-interface ZipToken {
-    zip: string;
-    start: number;
-    end: number;
-    /** Written the standard way: 12345 or 12345-6789 */
-    standard: boolean;
-}
+const STREET_WORDS = new Set([
+    "st", "street", "ave", "av", "avenue", "rd", "road", "dr", "drive", "blvd", "boulevard", "ln", "lane",
+    "way", "ct", "court", "pl", "place", "pkwy", "parkway", "hwy", "highway", "trl", "trail", "cir", "circle",
+    "ter", "terrace", "sq", "square", "cres", "crescent", "cv", "loop", "pike", "rte", "route", "fwy",
+    "expy", "freeway", "xing", "crossing", "grove", "gr", "close", "gate", "line", "concession", "sideroad"
+]);
+const DIRECTIONS = new Set(["n", "s", "e", "w", "ne", "nw", "se", "sw", "north", "south", "east", "west"]);
 
-/**
- * ZIP-like numbers: 12345, 12345-6789, and how exports mangle them: ZIP+4 without the dash
- * (123456789), and New England/New Jersey ZIPs that lost their leading zero (2134, 2134-5678, 21345678).
- */
-function zipTokens(text: string): ZipToken[] {
-    const found: ZipToken[] = [];
-    for (const m of text.matchAll(/\b(\d{4,9})(?:-(\d{4}))?\b/g)) {
-        const d = m[1];
-        let zip = "";
-        if (d.length === 5) zip = d;
-        else if (d.length === 4) zip = "0" + d;
-        else if (d.length === 9 && !m[2]) zip = d.slice(0, 5);
-        else if (d.length === 8 && !m[2]) zip = "0" + d.slice(0, 4);
-        if (zip) found.push({ zip, start: m.index, end: m.index + m[0].length, standard: d.length === 5 });
-    }
-    return found;
-}
+/** PO boxes, rural routes, units: things a geocoder can't place */
+const NOT_A_PLACE = new RegExp([
+    "\\b(?:p\\.?\\s*o\\.?\\s*box|post\\s+office\\s+box|box|r\\.?\\s*r\\.?|rural\\s+route|h\\.?\\s*c\\.?|site|comp|s\\.?\\s*s\\.?|suite|ste|unit|apt|lot)\\s*#?\\s*\\d+[a-z]?\\b",
+    "#\\s*\\d+[a-z]?\\b",
+    "\\bgeneral\\s+delivery\\b"
+].join("|"), "gi");
 
 const COUNTRY_WORDS = /\b(usa|u\.s\.a?\.?|united states(?: of america)?|us|canada|can|ca)\b/gi;
 
@@ -60,69 +55,164 @@ function countryFromField(value: string | null | undefined): "US" | "CA" | "" {
     return "";
 }
 
+/** Removes PO boxes and tidies the separators left behind */
+export function withoutPoBoxes(text: string): string {
+    return tidy(text.replace(NOT_A_PLACE, " "));
+}
+
+function tidy(text: string): string {
+    return text
+        .replace(/\s+,/g, ",")
+        .replace(/,(\s*,)+/g, ",")
+        .replace(/,(?=\S)/g, ", ")
+        .replace(/^[\s,]+|[\s,]+$/g, "")
+        .replace(/\s{2,}/g, " ");
+}
+
+const words = (s: string) => s.toLowerCase().split(/[^a-z0-9à-ÿ]+/).filter(Boolean);
+
+/** "California" in "California Street", or "NE" in "311 NE Main St" / "Main St NE", is part of a street */
+function partOfStreet(text: string, c: RegionCandidate): boolean {
+    const after = words(text.slice(c.end)).slice(0, 2);
+    const before = words(text.slice(0, c.pos)).slice(-1)[0] || "";
+    if (STREET_WORDS.has(after[0] || "")) return true;
+    if (c.byCode && c.region.code === "NE") {
+        if (/^\d/.test(before) || STREET_WORDS.has(before)) return true;
+        if (after[0] && STREET_WORDS.has(after[1] || "")) return true;
+    }
+    return !c.byCode && /^\d/.test(before);
+}
+
+interface Digits {
+    text: string;
+    start: number;
+    end: number;
+}
+
+/** ZIPs a run of digits could be: 12345, 12345-6789, 123456789 (no dash), 2134 (lost leading zero), 561756 (extra digit) */
+function zipReadings(d: Digits): string[] {
+    const m = /^(\d+)(?:-(\d{4}))?$/.exec(d.text);
+    if (!m) return [];
+    const n = m[1];
+    if (n.length === 5) return [n];
+    if (n.length === 4) return ["0" + n];
+    if (m[2]) return [];
+    if (n.length === 8) return ["0" + n.slice(0, 4)];
+    if (n.length >= 6 && n.length <= 9) return [n.slice(0, 5)];
+    return [];
+}
+
 export function analyzeLocation(text: string, stateField?: string | null, countryField?: string | null): PlaceInfo {
     let country = countryFromField(countryField) || countryInText(text);
     const ca = country === "US" ? null : findCanadianPostal(text);
     if (ca && !country) country = "CA";
 
-    // "CA" is California or Canada. It's Canada next to a province code or a postal code,
-    // California next to "US" or a California ZIP, and ignored when there's no telling.
-    let candidates = regionCandidates(text);
+    const digitRuns: Digits[] = [...text.matchAll(/\b\d+(?:-\d{4})?\b/g)].map(m => ({ text: m[0], start: m.index, end: m.index + m[0].length }));
+    const standardZipStates = new Set(digitRuns.filter(d => /^\d{5}(-\d{4})?$/.test(d.text))
+        .map(d => zipState(d.text.slice(0, 5))).filter(Boolean));
+
+    // "CA" is California or Canada: Canada next to a province code or postal code, California next to "US"
+    // or a California ZIP, ignored when there's no telling
+    let candidates = regionCandidates(text).filter(c => !partOfStreet(text, c));
     const caProvinceCode = candidates.some(c => c.byCode && c.region.iso.startsWith("CA-"));
-    const tokens = zipTokens(text);
-    const californiaZip = tokens.some(t => t.standard && zipState(t.zip) === "CA");
-    const keepCalifornia = country === "US" || (!country && !caProvinceCode && californiaZip);
+    const keepCalifornia = country === "US" || (!country && !caProvinceCode && standardZipStates.has("CA"));
     candidates = candidates.filter(c => !(c.byCode && c.region.code === "CA") || keepCalifornia);
     if (!country && caProvinceCode) country = "CA";
 
     let region: Region | null = stateField ? regionFromField(stateField, country) : null;
-    /** Where the state ends in the text; -1 when it came from its own field */
-    let regionEnd = -1;
+    let regionAt: RegionCandidate | null = null;
     if (!region) {
         const fitting = candidates.filter(c => !country || c.region.iso.startsWith(country + "-"));
-        const last = fitting.length ? fitting[fitting.length - 1] : null;
-        region = last ? last.region : null;
-        regionEnd = last ? last.end : -1;
+        // A state that agrees with a ZIP in the text wins; then codes ("MN") over names; then the last one
+        regionAt = [...fitting].reverse().find(c => standardZipStates.has(c.region.code))
+            || [...fitting].reverse().find(c => c.byCode)
+            || fitting[fitting.length - 1] || null;
+        region = regionAt ? regionAt.region : null;
     }
     if (!country && region) country = region.iso.slice(0, 2) as "US" | "CA";
 
-    // US ZIP: the last number that is a real ZIP in the row's state (earlier numbers are often house numbers).
-    // Mangled forms only count as the last number, after the state: "US, MA, 2134" but not "1234 Main St, Boston, MA".
+    // US ZIP. The number right after the state is read generously (561756, 123456789, 2134);
+    // elsewhere only a standard ZIP in the row's state counts, since other numbers are often house numbers.
     let zip: PlaceInfo["zip"] = null;
-    let zipSpan: [number, number] | null = null;
+    let zipConflict: PlaceInfo["zipConflict"] = null;
+    let zipRun: Digits | null = null;
     if (country !== "CA") {
-        const lastNumber = [...text.matchAll(/\d+/g)].pop();
-        for (const t of [...tokens].reverse()) {
-            if (!t.standard && (!region || t.start < regionEnd || !lastNumber || lastNumber.index >= t.end)) continue;
-            const at = zipCentre(t.zip);
-            const st = zipState(t.zip);
-            if (!at || !st) continue;
-            if (region ? region.iso !== `US-${st}` : country !== "US") continue;
-            zip = { code: t.zip, at };
-            zipSpan = [t.start, t.end];
-            if (!region) region = regionByIso(`US-${st}`);
+        const next = regionAt ? digitRuns.find(d => d.start >= regionAt.end && /^[\s,]*$/.test(text.slice(regionAt.end, d.start))) : null;
+        if (next && region) {
+            for (const code of zipReadings(next)) {
+                const st = zipState(code);
+                if (!zipCentre(code) || !st) continue;
+                if (`US-${st}` === region.iso) {
+                    const plain = /^\d{5}(-\d{4})?$|^\d{9}$/.test(next.text);
+                    zip = { code, at: zipCentre(code), read: plain ? undefined : next.text };
+                    zipRun = next;
+                    break;
+                }
+                if (!zipConflict) zipConflict = { code, state: st };
+            }
+        }
+        if (!zip) {
+            for (const d of [...digitRuns].reverse()) {
+                if (!/^\d{5}(-\d{4})?$/.test(d.text)) continue;
+                const code = d.text.slice(0, 5);
+                const st = zipState(code);
+                if (!zipCentre(code) || !st) continue;
+                if (region ? `US-${st}` !== region.iso : country !== "US") continue;
+                zip = { code, at: zipCentre(code) };
+                zipRun = d;
+                break;
+            }
+        }
+        if (zip) {
+            zipConflict = null;
+            if (!region) region = regionByIso(`US-${zipState(zip.code)}`);
             country = "US";
-            break;
+        } else if (zipConflict) {
+            zipRun = next;
         }
     }
 
-    const withoutCode = zipSpan ? text.slice(0, zipSpan[0]) + " " + text.slice(zipSpan[1]) : ca ? ca.rest : text;
-    const street = /\d/.test(withoutCode);
-    let leftover = withoutCode;
-    if (zip) {
-        for (const c of regionCandidates(withoutCode).reverse()) {
-            if (c.region === region) leftover = leftover.slice(0, c.pos) + " " + leftover.slice(c.end);
+    // Text with the ZIP/postal code taken out, and the canonical ZIP put back for lookups
+    let noCode = text;
+    let query = text;
+    if (zipRun) {
+        noCode = text.slice(0, zipRun.start) + " " + text.slice(zipRun.end);
+        query = zip ? text.slice(0, zipRun.start) + zip.code + text.slice(zipRun.end) : noCode;
+    } else if (ca) {
+        noCode = ca.rest;
+    }
+
+    // What's left in each comma-separated part: a street, a town, or nothing (state, country, PO box)
+    let street = false;
+    let town = false;
+    const regionWords = region ? new Set([region.code.toLowerCase(), ...words(region.name)]) : new Set<string>();
+    for (const part of noCode.split(/[,;]/)) {
+        const w = words(part.replace(NOT_A_PLACE, " ").replace(COUNTRY_WORDS, " "))
+            .filter(x => !regionWords.has(x));
+        if (!w.length) continue;
+        const lastStreetWord = w.reduce((at, x, i) => (STREET_WORDS.has(x) ? i : at), -1);
+        const hasNumber = w.some(x => /\d/.test(x));
+        if (hasNumber || lastStreetWord >= 0) {
+            street = true;
+            // "123 Main St Brooks": words after the street name (other than N/E/S/W) are a town
+            const tail = w.slice(lastStreetWord + 1).filter(x => !DIRECTIONS.has(x) && !/\d/.test(x));
+            if (lastStreetWord >= 0 && tail.length) town = true;
+        } else {
+            town = true;
         }
     }
-    leftover = leftover.replace(COUNTRY_WORDS, " ").replace(/[\s,.;:/\-#]+/g, "");
+
     return {
         country,
         region,
         zip,
+        zipConflict,
         ca,
         caCentre: ca ? fsaCentre(ca.fsa) : null,
         street,
-        zipOnly: !!zip && leftover === ""
+        town,
+        query: withoutPoBoxes(query),
+        queryNoCode: withoutPoBoxes(noCode)
     };
 }
 

@@ -14,7 +14,7 @@ import "./../style/visual.less";
 import { VisualFormattingSettingsModel, LEGEND_SLOTS, LegendColorItem, REGION_NAME_BASEMAPS } from "./settings";
 import { REGIONS, Region } from "./regions";
 import { Geocoder, GeoConfig, GeoPart, GeoQuery, GeoProvider, cacheKey, parseCountries } from "./geocoder";
-import { PlaceInfo, analyzeLocation, distanceKm } from "./places";
+import { PlaceInfo, analyzeLocation, distanceKm, withoutPoBoxes } from "./places";
 
 import IVisual = powerbi.extensibility.visual.IVisual;
 import IVisualHost = powerbi.extensibility.visual.IVisualHost;
@@ -117,6 +117,8 @@ interface Approx {
     /** Canadian postal area (first 3 characters) or US ZIP code */
     kind: "fsa" | "zip";
     code: string;
+    /** The ZIP as written, when it had to be read generously ("561756") */
+    read?: string;
 }
 
 interface Located {
@@ -209,6 +211,8 @@ export class Visual implements IVisual {
     private geoWaiting = 0;
     private geoNotFound: string[] = [];
     private geoApprox = 0;
+    /** Rows whose ZIP is in a different state than the row says, e.g. "US, TX, 54214" -> "54214 is in WI" */
+    private geoConflicts: string[] = [];
     private textOrder: MapPoint[] = [];
     private lastAzureKeyLegacy = "";
     /** Legend value per color slot (bubbles.c0, c1, ...), saved in the report as bubbles.legendSlots */
@@ -411,6 +415,7 @@ export class Visual implements IVisual {
         const legendColors = this.legendColors(dataView, legendI, highContrast);
         const toGeocode = new Map<string, GeoQuery>();
         const notFound = new Set<string>();
+        const conflicts = new Map<string, string>();
         let waiting = 0;
         let approxCount = 0;
 
@@ -434,6 +439,11 @@ export class Visual implements IVisual {
                 }
                 if (coords === null) {
                     notFound.add(loc.text);
+                    return;
+                }
+                if (coords === "conflict") {
+                    const c = this.placeInfo(loc).zipConflict;
+                    conflicts.set(loc.text, `${c.code} is in ${c.state}`);
                     return;
                 }
                 [lat, lon] = coords.at;
@@ -488,13 +498,15 @@ export class Visual implements IVisual {
                 identity: this.host.createSelectionIdBuilder().withTable(table, i).createSelectionId(),
                 tooltip: approx
                     ? [...this.buildTooltip(row, cols, [...locIs, legendI, labelI, sizeI, btI, ...tooltipIs]),
-                        { displayName: "Placed at", value: approx.kind === "zip" ? `ZIP code ${approx.code} area` : `Postal area ${approx.code} (approximate)` }]
+                        { displayName: "Placed at", value: approx.kind === "fsa" ? `Postal area ${approx.code} (approximate)`
+                            : approx.read ? `ZIP code ${approx.code} area (read from ${approx.read})` : `ZIP code ${approx.code} area` }]
                     : this.buildTooltip(row, cols, [...locIs, legendI, labelI, sizeI, btI, ...tooltipIs])
             });
         });
 
         this.geoWaiting = waiting;
         this.geoNotFound = [...notFound];
+        this.geoConflicts = [...conflicts].map(([text, why]) => `${text} (${why})`);
         this.geoApprox = approxCount;
         this.geocoder.request([...toGeocode.values()], geoCfg);
         return points;
@@ -572,46 +584,61 @@ export class Visual implements IVisual {
 
     /**
      * Coordinates for a row's Location, from what the text already says or the geocoder:
-     * - US ZIP with nothing more specific (or no street with OpenStreetMap): the ZIP centre, no lookup
-     * - Canadian postal code with only province/country, on OpenStreetMap: the postal-area centre
-     * - otherwise a lookup, checked against the row's state/province, and replaced by the ZIP/postal-area
-     *   centre when it lands too far from it
-     * Queues the lookup and returns "waiting" when the answer isn't known yet.
+     * - US ZIP: the ZIP centre, unless there's more to look up (street and town for OpenStreetMap,
+     *   either for Azure Maps); a lookup is kept only near the ZIP centre
+     * - ZIP from another state: looked up by town if there is one, else reported as a conflict
+     * - Canadian postal code: the postal-area centre on OpenStreetMap unless there's a town to look up;
+     *   lookups are kept only near the postal area
+     * - anything else: a lookup, checked against the row's state/province
+     * PO boxes and unit numbers are left out of lookups. Queues the lookup and returns "waiting"
+     * when the answer isn't known yet.
      */
-    private locate(loc: RowLocation, cfg: GeoConfig, queue: Map<string, GeoQuery>): Located | "waiting" | null {
+    private locate(loc: RowLocation, cfg: GeoConfig, queue: Map<string, GeoQuery>): Located | "waiting" | "conflict" | null {
         const info = this.placeInfo(loc);
         const osm = cfg.provider === "osm";
-        let text = loc.text;
+        let text = info.query;
         let parts = loc.parts;
-
-        let fallback: Located | null = null;
+        let onMiss: Located | "conflict" | null = null;
+        let near: [number, number] | null = null;
         let maxKm = Infinity;
+
         if (info.zip) {
-            fallback = { at: info.zip.at, approx: { kind: "zip", code: info.zip.code } };
+            const centre: Located = { at: info.zip.at, approx: { kind: "zip", code: info.zip.code, read: info.zip.read } };
+            const worthLookingUp = osm ? info.street && info.town : info.street || info.town;
+            if (!worthLookingUp) return centre;
+            onMiss = centre;
+            near = info.zip.at;
             maxKm = 80; // rural ZIP areas can be ~100 km across
-            if (info.zipOnly || (osm && !info.street)) return fallback;
+        } else if (info.zipConflict) {
+            if (!info.town) return "conflict";
+            text = info.queryNoCode; // the town decides; the ZIP is wrong or belongs to another state
+            onMiss = "conflict";
         } else if (info.ca && info.caCentre) {
-            fallback = { at: info.caCentre, approx: { kind: "fsa", code: info.ca.fsa } };
+            const centre: Located = { at: info.caCentre, approx: { kind: "fsa", code: info.ca.fsa } };
+            onMiss = centre;
+            near = info.caCentre;
             maxKm = info.ca.fsa[1] === "0" ? 250 : 80; // a 0 in the 2nd character is a rural area, often huge
-            // OpenStreetMap doesn't know Canadian postal codes: look up the rest, or use the area centre
+            // OpenStreetMap doesn't know Canadian postal codes: look up the town without it, or use the area centre
             if (osm) {
-                if (info.ca.postalOnly) return fallback;
-                text = info.ca.rest;
-                if (parts) {
-                    parts = { ...parts };
-                    delete parts.postalcode;
-                }
+                if (!info.town) return centre;
+                text = info.queryNoCode;
             }
         }
-        // Structured lookups: "TX" -> "Texas", which Nominatim matches reliably
-        if (parts && parts.state && info.region) parts = { ...parts, state: info.region.name };
+        if (parts) {
+            parts = { ...parts };
+            if (parts.street) parts.street = withoutPoBoxes(parts.street);
+            if (!parts.street) delete parts.street;
+            if (info.region && parts.state) parts.state = info.region.name; // "TX" -> "Texas" matches reliably
+            if (info.zip && parts.postalcode) parts.postalcode = info.zip.code;
+            if ((osm && info.ca) || info.zipConflict) delete parts.postalcode;
+        }
 
         const key = cacheKey(cfg, text);
         const found = this.geocoder.lookup(key);
         if (found === undefined) {
             const stopped = this.geocoder.stop || (cfg.provider === "azure" && !cfg.azureKey);
             // Still hand unplaceable rows to the geocoder when stopped, so it can say why (e.g. no Azure key)
-            if (!stopped || !fallback) {
+            if (!stopped || !onMiss) {
                 queue.set(key, {
                     key, text, parts,
                     expect: info.region ? info.region.iso : undefined,
@@ -619,10 +646,10 @@ export class Visual implements IVisual {
                     country: info.country || undefined
                 });
             }
-            return stopped && fallback ? fallback : "waiting";
+            return stopped && onMiss ? onMiss : "waiting";
         }
-        if (found === null) return fallback;
-        if (fallback && distanceKm(found, fallback.at) > maxKm) return fallback;
+        if (found === null) return onMiss;
+        if (near && distanceKm(found, near) > maxKm) return onMiss;
         return { at: found, approx: null };
     }
 
@@ -1117,6 +1144,11 @@ export class Visual implements IVisual {
             const names = this.geoNotFound.slice(0, 3).join("; ");
             const more = this.geoNotFound.length > 3 ? ` and ${this.geoNotFound.length - 3} more` : "";
             msgs.push(`Couldn't find ${this.geoNotFound.length} location(s): ${names}${more}. Add more detail (city, state, country) or Latitude/Longitude.`);
+        }
+        if (this.geoConflicts.length) {
+            const list = this.geoConflicts.slice(0, 3).join("; ");
+            const more = this.geoConflicts.length > 3 ? ` and ${this.geoConflicts.length - 3} more` : "";
+            msgs.push(`${this.geoConflicts.length} location(s) not placed because the ZIP code is in a different state than the row says: ${list}${more}. Fix the ZIP or state, or add Latitude/Longitude.`);
         }
         if (this.geoApprox > 0) {
             const osm = this.settings && String(this.settings.geocoding.provider.value.value) === "osm";
