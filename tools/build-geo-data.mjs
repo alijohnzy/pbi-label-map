@@ -60,9 +60,18 @@ const areaKm2 = geom => {
     }
     return total;
 };
+// [minLat, minLon, maxLat, maxLon], to catch saved results that sit in the wrong state (Aleutians crossing 180° are clamped)
+const bbox = geom => {
+    const polys = geom.type === "Polygon" ? [geom.coordinates] : geom.coordinates;
+    let [a, b, c, d] = [90, 180, -90, -180];
+    for (const poly of polys) for (const [lon, lat] of poly[0]) {
+        a = Math.min(a, lat); b = Math.min(b, lon); c = Math.max(c, lat); d = Math.max(d, lon);
+    }
+    return [a, b, c, d].map(x => Math.round(x * 100) / 100);
+};
 const regions = ne.features
     .filter(f => (f.properties.adm0_a3 === "USA" || f.properties.adm0_a3 === "CAN") && f.properties.iso_3166_2 && f.properties.postal)
-    .map(f => ({ ...f.properties, area_sqkm: areaKm2(f.geometry) }))
+    .map(f => ({ ...f.properties, area_sqkm: areaKm2(f.geometry), bbox: bbox(f.geometry) }))
     .map(p => ({
         iso: p.iso_3166_2,
         code: p.postal,
@@ -70,7 +79,8 @@ const regions = ne.features
         lat: Math.round(p.latitude * 1000) / 1000,
         lon: Math.round(p.longitude * 1000) / 1000,
         area: Math.round(p.area_sqkm),
-        minZoom: p.min_label || 3.5
+        minZoom: p.min_label || 3.5,
+        bbox: p.bbox
     }))
     .sort((a, b) => a.iso.localeCompare(b.iso));
 writeFileSync(path.join(out, "regions.json"), JSON.stringify(regions));

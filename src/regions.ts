@@ -20,6 +20,8 @@ export interface Region {
     area: number;
     /** Zoom level where the label starts to fit */
     minZoom: number;
+    /** [minLat, minLon, maxLat, maxLon] */
+    bbox: [number, number, number, number];
 }
 
 export const REGIONS = regionData as Region[];
@@ -56,6 +58,24 @@ for (const [alias, iso] of Object.entries(ALIASES)) {
 }
 // Longest names first so "West Virginia" wins over "Virginia"
 const NAME_LIST = [...NAMES.keys()].sort((a, b) => b.length - a.length);
+
+/** Point is inside the region's bounding box, with a margin for border towns and rough geocodes */
+export function inRegionBox(at: [number, number], region: Region, marginDeg = 0.3): boolean {
+    const [a, b, c, d] = region.bbox;
+    return at[0] >= a - marginDeg && at[0] <= c + marginDeg && at[1] >= b - marginDeg && at[1] <= d + marginDeg;
+}
+
+/** Provinces by the first letter of the postal code */
+const FSA_LETTER: Record<string, string[]> = {
+    A: ["NL"], B: ["NS"], C: ["PE"], E: ["NB"], G: ["QC"], H: ["QC"], J: ["QC"],
+    K: ["ON"], L: ["ON"], M: ["ON"], N: ["ON"], P: ["ON"], R: ["MB"], S: ["SK"], T: ["AB"],
+    V: ["BC"], X: ["NT", "NU"], Y: ["YT"]
+};
+
+/** Province codes a postal area belongs to, e.g. "T0J" -> ["AB"] */
+export function provincesOfFsa(fsa: string): string[] {
+    return FSA_LETTER[fsa.charAt(0).toUpperCase()] || [];
+}
 
 export function regionByIso(iso: string): Region | null {
     return REGIONS.find(r => r.iso === iso) || null;

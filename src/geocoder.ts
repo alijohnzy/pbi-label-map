@@ -64,6 +64,8 @@ export function cacheKey(cfg: GeoConfig, text: string): string {
 
 export class Geocoder {
     private hits = new Map<string, [number, number]>();
+    /** Keys that came from the report's saved cache, not looked up this session */
+    private saved = new Set<string>();
     private misses = new Set<string>();
     private pending = new Map<string, GeoQuery>();
     private cfg: GeoConfig | null = null;
@@ -102,8 +104,21 @@ export class Geocoder {
             const lo = Number(lon);
             if (key && !key.startsWith("osm|") && Number.isFinite(la) && Number.isFinite(lo) && !this.hits.has(key)) {
                 this.hits.set(key, [la, lo]);
+                this.saved.add(key);
             }
         }
+    }
+
+    /**
+     * Drops a saved result that fails a check older versions didn't make (e.g. wrong province), so it's
+     * looked up again. Only saved results: one found this session already passed the checks.
+     */
+    public forgetSaved(key: string): boolean {
+        if (!this.saved.has(key)) return false;
+        this.saved.delete(key);
+        this.hits.delete(key);
+        this.newHits++; // the saved cache changes
+        return true;
     }
 
     public serialize(): string {

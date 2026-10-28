@@ -12,7 +12,7 @@ import "leaflet/dist/leaflet.css";
 import "./../style/visual.less";
 
 import { VisualFormattingSettingsModel, LEGEND_SLOTS, LegendColorItem, REGION_NAME_BASEMAPS } from "./settings";
-import { REGIONS, Region } from "./regions";
+import { REGIONS, Region, inRegionBox } from "./regions";
 import { Geocoder, GeoAttempt, GeoConfig, GeoPart, GeoQuery, GeoProvider, cacheKey, parseCountries } from "./geocoder";
 import { PlaceInfo, analyzeLocation, distanceKm, withoutHouseNumber, withoutPoBoxes } from "./places";
 
@@ -642,7 +642,9 @@ export class Visual implements IVisual {
         }
 
         const k = cacheKey(cfg, key);
-        const found = this.geocoder.lookup(k);
+        let found = this.geocoder.lookup(k);
+        // A result saved by an older version can sit in the wrong state/province: look it up again
+        if (found && info.region && !inRegionBox(found, info.region) && this.geocoder.forgetSaved(k)) found = undefined;
         if (found === undefined) {
             const stopped = this.geocoder.stop || (cfg.provider === "azure" && !cfg.azureKey);
             // Still hand unplaceable rows to the geocoder when stopped, so it can say why (e.g. no Azure key)
@@ -1250,7 +1252,7 @@ export class Visual implements IVisual {
         if (this.geoConflicts.length) {
             const list = this.geoConflicts.slice(0, 3).join("; ");
             const more = this.geoConflicts.length > 3 ? ` and ${this.geoConflicts.length - 3} more` : "";
-            msgs.push(`${this.geoConflicts.length} location(s) not placed because the ZIP code is in a different state than the row says: ${list}${more}. Fix the ZIP or state, or add Latitude/Longitude.`);
+            msgs.push(`${this.geoConflicts.length} location(s) not placed because the ZIP or postal code is in a different state/province than the row says: ${list}${more}. Fix the code or the state/province, or add Latitude/Longitude.`);
         }
         if (this.geoApprox > 0) {
             const osm = this.settings && String(this.settings.geocoding.provider.value.value) === "osm";

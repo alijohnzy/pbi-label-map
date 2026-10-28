@@ -9,14 +9,15 @@
 
 import { CanadianPostal, findCanadianPostal, fsaCentre } from "./postal";
 import { zipCentre, zipState } from "./usZip";
-import { Region, RegionCandidate, countryInText, regionByIso, regionCandidates, regionFromField } from "./regions";
+import { Region, RegionCandidate, countryInText, provincesOfFsa, regionByIso, regionCandidates, regionFromField } from "./regions";
 
 export interface PlaceInfo {
     country: "US" | "CA" | "";
     region: Region | null;
     /** US ZIP that agrees with the state, with its centre; `read` is the original when it was mangled ("561756") */
     zip: { code: string; at: [number, number]; read?: string } | null;
-    /** The number right after the state is a real ZIP, but in another state ("US, TX, 54214" is in WI) */
+    /** The ZIP or postal code is real but in another state/province than the row says
+     * ("US, TX, 54214" is in WI, "CA, PQ, S0K 1A0" is in SK) */
     zipConflict: { code: string; state: string } | null;
     /** Canadian postal code and its postal-area centre */
     ca: CanadianPostal | null;
@@ -185,6 +186,16 @@ export function analyzeLocation(text: string, stateField?: string | null, countr
         }
     }
 
+    // A postal code from another province than the row names ("PQ" with an S... code is in Saskatchewan)
+    let caPostal = ca;
+    if (ca && region && region.iso.startsWith("CA-")) {
+        const provinces = provincesOfFsa(ca.fsa);
+        if (provinces.length && !provinces.includes(region.code)) {
+            zipConflict = { code: ca.fsa, state: provinces.join("/") };
+            caPostal = null;
+        }
+    }
+
     // Text with the ZIP/postal code taken out, and the canonical ZIP put back for lookups
     let noCode = text;
     let query = text;
@@ -228,8 +239,8 @@ export function analyzeLocation(text: string, stateField?: string | null, countr
         region,
         zip,
         zipConflict,
-        ca,
-        caCentre: ca ? fsaCentre(ca.fsa) : null,
+        ca: caPostal,
+        caCentre: caPostal ? fsaCentre(caPostal.fsa) : null,
         street,
         town,
         streetText: streets[0] || "",
