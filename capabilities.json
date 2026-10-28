@@ -183,6 +183,11 @@
                     "type": {
                         "bool": true
                     }
+                },
+                "regionNames": {
+                    "type": {
+                        "bool": true
+                    }
                 }
             }
         },

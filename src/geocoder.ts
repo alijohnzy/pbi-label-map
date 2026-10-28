@@ -18,6 +18,11 @@ export interface GeoQuery {
     text: string;
     /** Set when every Location field had a known data category */
     parts: Partial<Record<GeoPart, string>> | null;
+    /** ISO 3166-2 state/province the row names (e.g. "US-TX"); results elsewhere are rejected */
+    expect?: string;
+    expectName?: string;
+    /** Country the row names ("US"/"CA"), used when Only these countries is empty */
+    country?: string;
 }
 
 export interface GeoConfig {
@@ -37,8 +42,11 @@ const MAX_CACHE = 5000;
 const REQUEST_TIMEOUT_MS = 15000;
 const MAX_FAILURES = 3; // consecutive timeouts or server errors before giving up for this session
 
+// "osm2": results checked against the row's state (1.6). Older "osm|" entries could be in the wrong state.
+const KEY_PREFIX: Record<GeoProvider, string> = { osm: "osm2", azure: "azure" };
+
 export function cacheKey(cfg: GeoConfig, text: string): string {
-    return `${cfg.provider}|${cfg.countries.join(",")}|${text.toLowerCase()}`;
+    return `${KEY_PREFIX[cfg.provider]}|${cfg.countries.join(",")}|${text.toLowerCase()}`;
 }
 
 export class Geocoder {
@@ -79,7 +87,7 @@ export class Geocoder {
             const [key, lat, lon] = line.split("\t");
             const la = Number(lat);
             const lo = Number(lon);
-            if (key && Number.isFinite(la) && Number.isFinite(lo) && !this.hits.has(key)) {
+            if (key && !key.startsWith("osm|") && Number.isFinite(la) && Number.isFinite(lo) && !this.hits.has(key)) {
                 this.hits.set(key, [la, lo]);
             }
         }
@@ -202,13 +210,19 @@ export class Geocoder {
     }
 
     private async osm(q: GeoQuery, cfg: GeoConfig) {
-        const params = new URLSearchParams({ format: "jsonv2", limit: "1", addressdetails: "0" });
+        // With a state to check, ask for a few candidates with their address and keep the first in that state
+        const params = new URLSearchParams({
+            format: "jsonv2",
+            limit: q.expect ? "5" : "1",
+            addressdetails: q.expect ? "1" : "0"
+        });
         if (q.parts) {
             for (const [part, value] of Object.entries(q.parts)) params.set(part, value);
         } else {
             params.set("q", q.text);
         }
-        if (cfg.countries.length) params.set("countrycodes", cfg.countries.join(",").toLowerCase());
+        const countries = cfg.countries.length ? cfg.countries.join(",") : q.country || "";
+        if (countries) params.set("countrycodes", countries.toLowerCase());
 
         const res = await this.send(`${OSM_URL}?${params.toString()}`, { headers: { Accept: "application/json" } });
         if (!res) return;
@@ -222,8 +236,9 @@ export class Geocoder {
             return;
         }
         try {
-            const json = await res.json() as Array<{ lat: string; lon: string }>;
-            if (json.length) this.record(q.key, Number(json[0].lat), Number(json[0].lon));
+            const json = await res.json() as OsmResult[];
+            const match = q.expect ? json.find(r => inRegion(r, q.expect, q.expectName)) : json[0];
+            if (match) this.record(q.key, Number(match.lat), Number(match.lon));
             else this.misses.add(q.key);
         } catch {
             this.misses.add(q.key);
@@ -268,6 +283,23 @@ export class Geocoder {
             batch.forEach(q => this.misses.add(q.key));
         }
     }
+}
+
+interface OsmResult {
+    lat: string;
+    lon: string;
+    address?: Record<string, string>;
+}
+
+const fold = (s: string) => (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+/** Nominatim result is in the expected state/province (by ISO code, else by state name; kept when it has neither) */
+function inRegion(r: OsmResult, iso: string, name?: string): boolean {
+    const a = r.address || {};
+    const code = a["ISO3166-2-lvl4"] || a["ISO3166-2-lvl3"] || "";
+    if (code) return code.toUpperCase() === iso.toUpperCase();
+    if (a.state) return !!name && fold(a.state) === fold(name);
+    return true; // nothing to check against
 }
 
 interface AzureFeature {

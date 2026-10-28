@@ -99,11 +99,25 @@ class MapCard extends Card {
         description: "Shows any base map in shades of grey so the bubbles stand out",
         value: false
     });
+    regionNames = new formattingSettings.ToggleSwitch({
+        name: "regionNames",
+        displayName: "State and province names",
+        description: "Names US states and Canadian provinces when zoomed out. Grey streets and Offline outline don't show them on their own.",
+        value: true
+    });
 
     name = "map";
     displayName = "Map";
-    slices: Slice[] = [this.basemap, this.greyscale, this.autoFit, this.zoomControl, this.wheelZoom];
+    slices: Slice[] = [this.basemap, this.greyscale, this.regionNames, this.autoFit, this.zoomControl, this.wheelZoom];
+
+    syncVisibility() {
+        const b = String(this.basemap.value.value);
+        this.regionNames.visible = REGION_NAME_BASEMAPS.has(b);
+    }
 }
+
+/** Base maps without their own state/province labels, which get ours */
+export const REGION_NAME_BASEMAPS = new Set(["esriGray", "outline"]);
 
 /** Legend values that get their own color picker; the rest use theme colors */
 export const LEGEND_SLOTS = 60;
@@ -405,6 +419,7 @@ export class VisualFormattingSettingsModel extends Model {
     cards = [this.map, this.bubbles, this.bubbleText, this.labels, this.legend, this.geocoding, this.services];
 
     syncVisibility() {
+        this.map.syncVisibility();
         this.bubbleText.syncVisibility();
     }
 }

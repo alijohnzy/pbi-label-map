@@ -144,3 +144,23 @@
 .plm-root .leaflet-control-attribution {
     font-size: 9px;
 }
+
+/* State and province names on base maps that don't have them (Grey streets, Offline outline) */
+.plm-root .plm-region {
+    pointer-events: none;
+}
+
+.plm-root .plm-region-name {
+    position: absolute;
+    left: 0;
+    top: 0;
+    transform: translate(-50%, -50%);
+    white-space: nowrap;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.1;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #8a9099;
+    text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 4px #fff;
+}

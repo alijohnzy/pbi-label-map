@@ -11,9 +11,10 @@ import worldTopo from "world-atlas/countries-110m.json";
 import "leaflet/dist/leaflet.css";
 import "./../style/visual.less";
 
-import { VisualFormattingSettingsModel, LEGEND_SLOTS, LegendColorItem } from "./settings";
+import { VisualFormattingSettingsModel, LEGEND_SLOTS, LegendColorItem, REGION_NAME_BASEMAPS } from "./settings";
+import { REGIONS, Region } from "./regions";
 import { Geocoder, GeoConfig, GeoPart, GeoQuery, GeoProvider, cacheKey, parseCountries } from "./geocoder";
-import { findCanadianPostal, fsaCentre } from "./postal";
+import { PlaceInfo, analyzeLocation, distanceKm } from "./places";
 
 import IVisual = powerbi.extensibility.visual.IVisual;
 import IVisualHost = powerbi.extensibility.visual.IVisualHost;
@@ -112,6 +113,17 @@ function tileUrl(def: TileDef, keys: MapKeys): string {
     return def.url;
 }
 
+interface Approx {
+    /** Canadian postal area (first 3 characters) or US ZIP code */
+    kind: "fsa" | "zip";
+    code: string;
+}
+
+interface Located {
+    at: [number, number];
+    approx: Approx | null;
+}
+
 interface MapPoint {
     lat: number;
     lon: number;
@@ -120,8 +132,8 @@ interface MapPoint {
     labelText: string;
     /** Text drawn inside the bubble */
     bubbleText: string;
-    /** Postal area used when the exact location couldn't be found, e.g. "T0J" */
-    approx: string | null;
+    /** Set when placed at a postal area or ZIP centre instead of an exact location */
+    approx: Approx | null;
     priority: number;
     radius: number;
     color: string;
@@ -202,6 +214,9 @@ export class Visual implements IVisual {
     /** Legend value per color slot (bubbles.c0, c1, ...), saved in the report as bubbles.legendSlots */
     private legendSlots: string[] = [];
     private legendSlotsSaved = "";
+    private regionLayer: L.LayerGroup;
+    /** Biggest first, so they win label collisions */
+    private regionMarks: Array<{ region: Region; marker: L.Marker }> = [];
 
     constructor(options: VisualConstructorOptions) {
         this.host = options.host;
@@ -236,6 +251,10 @@ export class Visual implements IVisual {
         this.attribution = L.control.attribution({ prefix: false, position: "bottomright" }).addTo(this.map);
         this.zoomControl = L.control.zoom({ position: "topleft" });
         this.map.createPane("plm-base").style.zIndex = "150";
+        const regionPane = this.map.createPane("plm-regions");
+        regionPane.style.zIndex = "380"; // above tiles, below bubbles (400) and labels (650)
+        regionPane.style.pointerEvents = "none";
+        this.regionLayer = L.layerGroup();
         this.markerLayer = L.layerGroup().addTo(this.map);
         this.map.setView([30, -40], 2);
 
@@ -402,7 +421,7 @@ export class Visual implements IVisual {
             const hasLatLon = lat !== null && lon !== null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
 
             // Latitude/Longitude win when the row has them; otherwise geocode the Location text
-            let approx: string | null = null;
+            let approx: Approx | null = null;
             if (!hasLatLon) {
                 if (!loc) {
                     this.skippedRows++;
@@ -419,7 +438,7 @@ export class Visual implements IVisual {
                 }
                 [lat, lon] = coords.at;
                 approx = coords.approx;
-                if (approx) approxCount++;
+                if (approx && approx.kind === "fsa") approxCount++;
             }
 
             const name = loc ? loc.text : null;
@@ -469,7 +488,7 @@ export class Visual implements IVisual {
                 identity: this.host.createSelectionIdBuilder().withTable(table, i).createSelectionId(),
                 tooltip: approx
                     ? [...this.buildTooltip(row, cols, [...locIs, legendI, labelI, sizeI, btI, ...tooltipIs]),
-                        { displayName: "Placed at", value: `Postal area ${approx} (approximate)` }]
+                        { displayName: "Placed at", value: approx.kind === "zip" ? `ZIP code ${approx.code} area` : `Postal area ${approx.code} (approximate)` }]
                     : this.buildTooltip(row, cols, [...locIs, legendI, labelI, sizeI, btI, ...tooltipIs])
             });
         });
@@ -552,37 +571,71 @@ export class Visual implements IVisual {
     // ---------- geocoding ----------
 
     /**
-     * Coordinates for a row's Location: from the geocoding cache, or the Canadian postal-area table.
-     * Queues a lookup and returns "waiting" when the answer isn't known yet.
+     * Coordinates for a row's Location, from what the text already says or the geocoder:
+     * - US ZIP with nothing more specific (or no street with OpenStreetMap): the ZIP centre, no lookup
+     * - Canadian postal code with only province/country, on OpenStreetMap: the postal-area centre
+     * - otherwise a lookup, checked against the row's state/province, and replaced by the ZIP/postal-area
+     *   centre when it lands too far from it
+     * Queues the lookup and returns "waiting" when the answer isn't known yet.
      */
-    private locate(loc: RowLocation, cfg: GeoConfig, queue: Map<string, GeoQuery>):
-        { at: [number, number]; approx: string | null } | "waiting" | null {
-        const ca = findCanadianPostal(loc.text);
-        const centre = ca ? fsaCentre(ca.fsa) : null;
+    private locate(loc: RowLocation, cfg: GeoConfig, queue: Map<string, GeoQuery>): Located | "waiting" | null {
+        const info = this.placeInfo(loc);
+        const osm = cfg.provider === "osm";
         let text = loc.text;
         let parts = loc.parts;
 
-        // OpenStreetMap doesn't know Canadian postal codes: use the rest of the location,
-        // or go straight to the postal area when there's nothing else to look up
-        if (ca && cfg.provider === "osm") {
-            if (ca.postalOnly && centre) return { at: centre, approx: ca.fsa };
-            text = ca.rest;
-            if (parts) {
-                parts = { ...parts };
-                delete parts.postalcode;
+        let fallback: Located | null = null;
+        let maxKm = Infinity;
+        if (info.zip) {
+            fallback = { at: info.zip.at, approx: { kind: "zip", code: info.zip.code } };
+            maxKm = 80; // rural ZIP areas can be ~100 km across
+            if (info.zipOnly || (osm && !info.street)) return fallback;
+        } else if (info.ca && info.caCentre) {
+            fallback = { at: info.caCentre, approx: { kind: "fsa", code: info.ca.fsa } };
+            maxKm = info.ca.fsa[1] === "0" ? 250 : 80; // a 0 in the 2nd character is a rural area, often huge
+            // OpenStreetMap doesn't know Canadian postal codes: look up the rest, or use the area centre
+            if (osm) {
+                if (info.ca.postalOnly) return fallback;
+                text = info.ca.rest;
+                if (parts) {
+                    parts = { ...parts };
+                    delete parts.postalcode;
+                }
             }
         }
+        // Structured lookups: "TX" -> "Texas", which Nominatim matches reliably
+        if (parts && parts.state && info.region) parts = { ...parts, state: info.region.name };
 
         const key = cacheKey(cfg, text);
         const found = this.geocoder.lookup(key);
         if (found === undefined) {
             const stopped = this.geocoder.stop || (cfg.provider === "azure" && !cfg.azureKey);
-            if (stopped && centre) return { at: centre, approx: ca.fsa };
-            queue.set(key, { key, text, parts });
-            return "waiting";
+            // Still hand unplaceable rows to the geocoder when stopped, so it can say why (e.g. no Azure key)
+            if (!stopped || !fallback) {
+                queue.set(key, {
+                    key, text, parts,
+                    expect: info.region ? info.region.iso : undefined,
+                    expectName: info.region ? info.region.name : undefined,
+                    country: info.country || undefined
+                });
+            }
+            return stopped && fallback ? fallback : "waiting";
         }
-        if (found === null) return centre ? { at: centre, approx: ca.fsa } : null;
+        if (found === null) return fallback;
+        if (fallback && distanceKm(found, fallback.at) > maxKm) return fallback;
         return { at: found, approx: null };
+    }
+
+    private placeCache = new Map<string, PlaceInfo>();
+
+    private placeInfo(loc: RowLocation): PlaceInfo {
+        let info = this.placeCache.get(loc.text);
+        if (!info) {
+            if (this.placeCache.size > 20000) this.placeCache.clear();
+            info = analyzeLocation(loc.text, loc.parts && loc.parts.state, loc.parts && loc.parts.country);
+            this.placeCache.set(loc.text, info);
+        }
+        return info;
     }
 
     private geoConfig(): GeoConfig {
@@ -821,6 +874,7 @@ export class Visual implements IVisual {
         else this.zoomControl.remove();
 
         this.root.classList.toggle("plm-grey", m.greyscale.value);
+        this.showRegionNames(m.regionNames.value && REGION_NAME_BASEMAPS.has(this.basemapKey));
 
         if (m.wheelZoom.value) this.map.scrollWheelZoom.enable();
         else this.map.scrollWheelZoom.disable();
@@ -860,6 +914,28 @@ export class Visual implements IVisual {
         }
         this.baseLayer.addTo(this.map);
         this.updateNotice();
+    }
+
+    private showRegionNames(on: boolean) {
+        if (on && !this.regionMarks.length) {
+            for (const region of [...REGIONS].sort((a, b) => b.area - a.area)) {
+                const el = document.createElement("div");
+                el.className = "plm-region-name";
+                el.textContent = region.name;
+                const marker = L.marker([region.lat, region.lon], {
+                    icon: L.divIcon({ className: "plm-region", html: el, iconSize: [0, 0] }),
+                    interactive: false,
+                    keyboard: false,
+                    pane: "plm-regions"
+                });
+                this.regionLayer.addLayer(marker);
+                this.regionMarks.push({ region, marker });
+            }
+        }
+        const isOn = this.map.hasLayer(this.regionLayer);
+        if (on && !isOn) this.regionLayer.addTo(this.map);
+        if (!on && isOn) this.regionLayer.remove();
+        if (on !== isOn) this.queueDeclutter();
     }
 
     private renderLegend() {
@@ -936,22 +1012,49 @@ export class Visual implements IVisual {
         const texts = this.textOrder.map(p => tipEl(p.textTip)).filter(Boolean) as HTMLElement[];
         const labels = this.labelOrder.map(p => tipEl(p.marker.getTooltip())).filter(Boolean) as HTMLElement[];
         for (const el of [...texts, ...labels]) el.style.visibility = "";
-        if (!this.settings || !this.settings.labels.avoidOverlap.value) return;
+        if (!this.settings) return;
+        const avoid = this.settings.labels.avoidOverlap.value;
 
         // Bubble texts first (they belong to the node), then labels, which also avoid bubble texts
         const view = this.mapEl.getBoundingClientRect();
-        const placed: DOMRect[] = [];
-        const pad = 2;
+        const placed: Box[] = [];
         const place = (el: HTMLElement) => {
             const r = el.getBoundingClientRect();
-            if (r.right < view.left || r.left > view.right || r.bottom < view.top || r.top > view.bottom) return;
-            const hit = placed.some(q =>
-                r.left - pad < q.right && r.right + pad > q.left && r.top - pad < q.bottom && r.bottom + pad > q.top);
-            if (hit) el.style.visibility = "hidden";
+            if (!overlaps(r, view, 0)) return;
+            if (avoid && placed.some(q => overlaps(r, q, 2))) el.style.visibility = "hidden";
             else placed.push(r);
         };
         texts.forEach(place);
         labels.forEach(place);
+        this.declutterRegions(placed, view);
+    }
+
+    /** State/province names sit under the data: hidden where they'd touch a bubble, a label or each other */
+    private declutterRegions(placed: Box[], view: DOMRect) {
+        if (!this.map.hasLayer(this.regionLayer)) return;
+        const zoom = this.map.getZoom();
+        const obstacles: Box[] = [...placed];
+        for (const p of this.points) {
+            const c = this.map.latLngToContainerPoint([p.lat, p.lon]);
+            const x = view.left + c.x;
+            const y = view.top + c.y;
+            const r = p.radius;
+            const box = { left: x - r, right: x + r, top: y - r, bottom: y + r };
+            if (overlaps(box, view, 0)) obstacles.push(box);
+        }
+        const names: Box[] = [];
+        for (const { region, marker } of this.regionMarks) {
+            const el = marker.getElement();
+            const label = el && el.firstElementChild as HTMLElement;
+            if (!label) continue;
+            label.style.visibility = "";
+            const fits = zoom >= Math.max(3, region.minZoom - 0.5) && zoom <= 7.5;
+            const r = label.getBoundingClientRect();
+            const hidden = !fits || !overlaps(r, view, 0)
+                || obstacles.some(q => overlaps(r, q, 1)) || names.some(q => overlaps(r, q, 6));
+            if (hidden) label.style.visibility = "hidden";
+            else names.push(r);
+        }
     }
 
     // ---------- interaction ----------
@@ -1085,6 +1188,17 @@ function locationOf(row: PrimitiveValue[], cols: DataViewMetadataColumn[], locIs
     }
     if (!values.length) return null;
     return { text: values.join(", "), parts: structured ? parts : null };
+}
+
+interface Box {
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+}
+
+function overlaps(a: Box, b: Box, pad: number): boolean {
+    return a.left - pad < b.right && a.right + pad > b.left && a.top - pad < b.bottom && a.bottom + pad > b.top;
 }
 
 function parseSlots(text: string): string[] {
