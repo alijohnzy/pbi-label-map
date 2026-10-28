@@ -25,6 +25,9 @@ export interface PlaceInfo {
     street: boolean;
     /** Has a place name that isn't the state, country, code or PO box ("Friona", "Brooks") */
     town: boolean;
+    /** The street address and town as written, PO boxes left out: "10232 Hunter School Rd", "Marine" */
+    streetText: string;
+    townText: string;
     /** Text to look up: PO boxes and unit numbers removed, a mangled ZIP written properly */
     query: string;
     /** The same without the ZIP/postal code (OpenStreetMap doesn't know Canadian ones; a conflicting ZIP misleads) */
@@ -89,12 +92,16 @@ interface Digits {
     end: number;
 }
 
-/** ZIPs a run of digits could be: 12345, 12345-6789, 123456789 (no dash), 2134 (lost leading zero), 561756 (extra digit) */
-function zipReadings(d: Digits): string[] {
+/**
+ * ZIPs a run of digits could be: 12345, 12345-6789, and when it stands alone as the ZIP field,
+ * 123456789 (no dash), 2134 (lost leading zero), 561756 (extra digit)
+ */
+function zipReadings(d: Digits, standalone: boolean): string[] {
     const m = /^(\d+)(?:-(\d{4}))?$/.exec(d.text);
     if (!m) return [];
     const n = m[1];
     if (n.length === 5) return [n];
+    if (!standalone) return [];
     if (n.length === 4) return ["0" + n];
     if (m[2]) return [];
     if (n.length === 8) return ["0" + n.slice(0, 4)];
@@ -138,17 +145,21 @@ export function analyzeLocation(text: string, stateField?: string | null, countr
     let zipRun: Digits | null = null;
     if (country !== "CA") {
         const next = regionAt ? digitRuns.find(d => d.start >= regionAt.end && /^[\s,]*$/.test(text.slice(regionAt.end, d.start))) : null;
+        // The ZIP field: a number on its own between commas ("US, IL, 6221, ..."), not a house number ("IL, 10232 Hunter ...")
+        const standalone = !!next && /^\s*([,;]|$)/.test(text.slice(next.end));
+        const standard = !!next && /^\d{5}(-\d{4})?$/.test(next.text);
         if (next && region) {
-            for (const code of zipReadings(next)) {
+            for (const code of zipReadings(next, standalone)) {
                 const st = zipState(code);
                 if (!zipCentre(code) || !st) continue;
                 if (`US-${st}` === region.iso) {
-                    const plain = /^\d{5}(-\d{4})?$|^\d{9}$/.test(next.text);
+                    const plain = standard || /^\d{9}$/.test(next.text);
                     zip = { code, at: zipCentre(code), read: plain ? undefined : next.text };
                     zipRun = next;
                     break;
                 }
-                if (!zipConflict) zipConflict = { code, state: st };
+                // A proper ZIP from another state is worth reporting; a garbled one ("6221") is just ignored
+                if (!zipConflict && standard) zipConflict = { code, state: st };
             }
         }
         if (!zip) {
@@ -167,8 +178,8 @@ export function analyzeLocation(text: string, stateField?: string | null, countr
             zipConflict = null;
             if (!region) region = regionByIso(`US-${zipState(zip.code)}`);
             country = "US";
-        } else if (zipConflict) {
-            zipRun = next;
+        } else if (zipConflict || standalone) {
+            zipRun = next; // a wrong or garbled ZIP field: keep it out of the street and town
         }
     }
 
@@ -183,24 +194,30 @@ export function analyzeLocation(text: string, stateField?: string | null, countr
     }
 
     // What's left in each comma-separated part: a street, a town, or nothing (state, country, PO box)
-    let street = false;
-    let town = false;
-    const regionWords = region ? new Set([region.code.toLowerCase(), ...words(region.name)]) : new Set<string>();
+    const streets: string[] = [];
+    const towns: string[] = [];
     for (const part of noCode.split(/[,;]/)) {
-        const w = words(part.replace(NOT_A_PLACE, " ").replace(COUNTRY_WORDS, " "))
-            .filter(x => !regionWords.has(x));
-        if (!w.length) continue;
-        const lastStreetWord = w.reduce((at, x, i) => (STREET_WORDS.has(x) ? i : at), -1);
-        const hasNumber = w.some(x => /\d/.test(x));
-        if (hasNumber || lastStreetWord >= 0) {
-            street = true;
+        let cleaned = part.replace(NOT_A_PLACE, " ").replace(COUNTRY_WORDS, " ");
+        // The state as its own part ("Texas"), or its code anywhere ("TX 79035"); not "Oklahoma" in "Oklahoma City"
+        if (region) cleaned = cleaned.replace(new RegExp(`\\b${region.code}\\b`, "g"), " ");
+        if (region && fold(cleaned.trim()) === fold(region.name)) cleaned = "";
+        const toks = cleaned.split(/\s+/).map(t => t.replace(/^[.\-#:]+|[.\-#:]+$/g, "")).filter(Boolean);
+        if (!toks.length) continue;
+        const lower = toks.map(t => t.toLowerCase().replace(/\.$/, ""));
+        const lastStreetWord = lower.reduce((at, x, i) => (STREET_WORDS.has(x) ? i : at), -1);
+        if (toks.some(t => /\d/.test(t)) || lastStreetWord >= 0) {
             // "123 Main St Brooks": words after the street name (other than N/E/S/W) are a town
-            const tail = w.slice(lastStreetWord + 1).filter(x => !DIRECTIONS.has(x) && !/\d/.test(x));
-            if (lastStreetWord >= 0 && tail.length) town = true;
+            let end = lastStreetWord >= 0 ? lastStreetWord + 1 : toks.length;
+            while (end < toks.length && DIRECTIONS.has(lower[end])) end++;
+            const tail = toks.slice(end).filter(t => !/\d/.test(t));
+            streets.push(toks.slice(0, lastStreetWord >= 0 ? end : toks.length).join(" "));
+            if (lastStreetWord >= 0 && tail.length) towns.push(tail.join(" "));
         } else {
-            town = true;
+            towns.push(toks.join(" "));
         }
     }
+    const street = streets.length > 0;
+    const town = towns.length > 0;
 
     return {
         country,
@@ -211,9 +228,20 @@ export function analyzeLocation(text: string, stateField?: string | null, countr
         caCentre: ca ? fsaCentre(ca.fsa) : null,
         street,
         town,
+        streetText: streets[0] || "",
+        townText: towns[0] || "",
         query: withoutPoBoxes(query),
         queryNoCode: withoutPoBoxes(noCode)
     };
+}
+
+function fold(s: string): string {
+    return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+/** "10232 Hunter School Rd" -> "Hunter School Rd", for when the house number isn't on the map */
+export function withoutHouseNumber(street: string): string {
+    return street.replace(/^\s*\d+[a-z]?(?:-\d+)?\s+/i, "");
 }
 
 /** Great-circle distance in km */

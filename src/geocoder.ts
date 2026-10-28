@@ -8,8 +8,16 @@
  * for the session only, so they are retried the next time the report opens.
  */
 
+import { distanceKm } from "./places";
+
 export type GeoProvider = "osm" | "azure";
 export type GeoPart = "street" | "city" | "county" | "state" | "postalcode" | "country";
+
+/** One way to ask: free text, or structured fields (street, city, state, ...) */
+export interface GeoAttempt {
+    text?: string;
+    parts?: Partial<Record<GeoPart, string>> | null;
+}
 
 export interface GeoQuery {
     /** Cache key: provider, country filter and the location text */
@@ -23,6 +31,11 @@ export interface GeoQuery {
     expectName?: string;
     /** Country the row names ("US"/"CA"), used when Only these countries is empty */
     country?: string;
+    /** OpenStreetMap: asked in this order until one gives a result that passes the checks */
+    attempts?: GeoAttempt[];
+    /** Results farther than maxKm from here (the row's ZIP or postal area) are rejected */
+    near?: [number, number];
+    maxKm?: number;
 }
 
 export interface GeoConfig {
@@ -209,46 +222,54 @@ export class Geocoder {
         }
     }
 
+    /** Tries each way of asking in turn (e.g. street + town, street name + town, town) until a result passes */
     private async osm(q: GeoQuery, cfg: GeoConfig) {
-        // With a state to check, ask for a few candidates with their address and keep the first in that state
-        const params = new URLSearchParams({
-            format: "jsonv2",
-            limit: q.expect ? "5" : "1",
-            addressdetails: q.expect ? "1" : "0"
-        });
-        if (q.parts) {
-            for (const [part, value] of Object.entries(q.parts)) params.set(part, value);
-        } else {
-            params.set("q", q.text);
-        }
-        const countries = cfg.countries.length ? cfg.countries.join(",") : q.country || "";
-        if (countries) params.set("countrycodes", countries.toLowerCase());
+        const attempts = q.attempts && q.attempts.length ? q.attempts : [{ text: q.text, parts: q.parts }];
+        const checked = !!(q.expect || q.near);
+        for (let i = 0; i < attempts.length; i++) {
+            if (i > 0) await sleep(OSM_SPACING_MS);
+            if (this.stop) return;
+            const a = attempts[i];
+            // With something to check, ask for a few candidates with their address and keep the first that passes
+            const params = new URLSearchParams({
+                format: "jsonv2",
+                limit: checked ? "5" : "1",
+                addressdetails: q.expect ? "1" : "0"
+            });
+            if (a.parts) {
+                for (const [part, value] of Object.entries(a.parts)) if (value) params.set(part, value);
+            } else {
+                params.set("q", a.text || q.text);
+            }
+            const countries = cfg.countries.length ? cfg.countries.join(",") : q.country || "";
+            if (countries) params.set("countrycodes", countries.toLowerCase());
 
-        const res = await this.send(`${OSM_URL}?${params.toString()}`, { headers: { Accept: "application/json" } });
-        if (!res) return;
-        if (res.status === 429 || res.status === 403) {
-            this.lastError = `HTTP ${res.status}`;
-            this.stop = "refused";
-            return;
+            const res = await this.send(`${OSM_URL}?${params.toString()}`, { headers: { Accept: "application/json" } });
+            if (!res) return;
+            if (res.status === 429 || res.status === 403) {
+                this.lastError = `HTTP ${res.status}`;
+                this.stop = "refused";
+                return;
+            }
+            if (!res.ok) continue;
+            try {
+                const json = await res.json() as OsmResult[];
+                const match = json.find(r => (!q.expect || inRegion(r, q.expect, q.expectName)) && near(q, Number(r.lat), Number(r.lon)));
+                if (match) {
+                    this.record(q.key, Number(match.lat), Number(match.lon));
+                    return;
+                }
+            } catch {
+                // try the next way of asking
+            }
         }
-        if (!res.ok) {
-            this.misses.add(q.key);
-            return;
-        }
-        try {
-            const json = await res.json() as OsmResult[];
-            const match = q.expect ? json.find(r => inRegion(r, q.expect, q.expectName)) : json[0];
-            if (match) this.record(q.key, Number(match.lat), Number(match.lon));
-            else this.misses.add(q.key);
-        } catch {
-            this.misses.add(q.key);
-        }
+        this.misses.add(q.key);
     }
 
     private async azureBatch(batch: GeoQuery[], cfg: GeoConfig) {
         const filter = cfg.countries.length > 0;
         const body = {
-            batchItems: batch.map((q, i) => ({ query: q.text, top: filter ? 5 : 1, optionalId: String(i) }))
+            batchItems: batch.map((q, i) => ({ query: q.text, top: filter || q.near ? 5 : 1, optionalId: String(i) }))
         };
         const res = await this.send(AZURE_URL, {
             method: "POST",
@@ -273,9 +294,8 @@ export class Geocoder {
             json.batchItems.forEach((item, i) => {
                 const q = batch[i];
                 const features = (item && item.features) || [];
-                const match = filter
-                    ? features.find(f => cfg.countries.includes(countryOf(f)))
-                    : features[0];
+                const match = features.find(f => (!filter || cfg.countries.includes(countryOf(f)))
+                    && near(q, f.geometry.coordinates[1], f.geometry.coordinates[0]));
                 if (match) this.record(q.key, match.geometry.coordinates[1], match.geometry.coordinates[0]);
                 else this.misses.add(q.key);
             });
@@ -294,6 +314,11 @@ interface OsmResult {
 const fold = (s: string) => (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 /** Nominatim result is in the expected state/province (by ISO code, else by state name; kept when it has neither) */
+/** Within the query's distance limit of its ZIP/postal area (or no limit) */
+function near(q: GeoQuery, lat: number, lon: number): boolean {
+    return !q.near || !Number.isFinite(lat) || distanceKm([lat, lon], q.near) <= (q.maxKm || Infinity);
+}
+
 function inRegion(r: OsmResult, iso: string, name?: string): boolean {
     const a = r.address || {};
     const code = a["ISO3166-2-lvl4"] || a["ISO3166-2-lvl3"] || "";

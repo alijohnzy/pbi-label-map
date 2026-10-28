@@ -13,8 +13,8 @@ import "./../style/visual.less";
 
 import { VisualFormattingSettingsModel, LEGEND_SLOTS, LegendColorItem, REGION_NAME_BASEMAPS } from "./settings";
 import { REGIONS, Region } from "./regions";
-import { Geocoder, GeoConfig, GeoPart, GeoQuery, GeoProvider, cacheKey, parseCountries } from "./geocoder";
-import { PlaceInfo, analyzeLocation, distanceKm, withoutPoBoxes } from "./places";
+import { Geocoder, GeoAttempt, GeoConfig, GeoPart, GeoQuery, GeoProvider, cacheKey, parseCountries } from "./geocoder";
+import { PlaceInfo, analyzeLocation, distanceKm, withoutHouseNumber, withoutPoBoxes } from "./places";
 
 import IVisual = powerbi.extensibility.visual.IVisual;
 import IVisualHost = powerbi.extensibility.visual.IVisualHost;
@@ -583,67 +583,57 @@ export class Visual implements IVisual {
     // ---------- geocoding ----------
 
     /**
-     * Coordinates for a row's Location, from what the text already says or the geocoder:
-     * - US ZIP: the ZIP centre, unless there's more to look up (street and town for OpenStreetMap,
-     *   either for Azure Maps); a lookup is kept only near the ZIP centre
-     * - ZIP from another state: looked up by town if there is one, else reported as a conflict
-     * - Canadian postal code: the postal-area centre on OpenStreetMap unless there's a town to look up;
-     *   lookups are kept only near the postal area
-     * - anything else: a lookup, checked against the row's state/province
-     * PO boxes and unit numbers are left out of lookups. Queues the lookup and returns "waiting"
-     * when the answer isn't known yet.
+     * Coordinates for a row's Location. The street address and town come first, then the rest:
+     * - OpenStreetMap is asked for street + town, then the street name without the house number + town,
+     *   then the town, each checked against the row's state/province and its ZIP or postal area
+     * - with nothing to look up (no town), or when every way fails: the ZIP or postal-area centre
+     * - a ZIP from another state than the row says: the town if there is one, else reported as a conflict
+     * PO boxes and unit numbers are never looked up. Queues the lookup and returns "waiting" when the
+     * answer isn't known yet.
      */
     private locate(loc: RowLocation, cfg: GeoConfig, queue: Map<string, GeoQuery>): Located | "waiting" | "conflict" | null {
         const info = this.placeInfo(loc);
         const osm = cfg.provider === "osm";
-        let text = info.query;
-        let parts = loc.parts;
+        let key = info.query;
         let onMiss: Located | "conflict" | null = null;
-        let near: [number, number] | null = null;
-        let maxKm = Infinity;
+        let near: [number, number] | undefined;
+        let maxKm: number | undefined;
 
         if (info.zip) {
             const centre: Located = { at: info.zip.at, approx: { kind: "zip", code: info.zip.code, read: info.zip.read } };
-            const worthLookingUp = osm ? info.street && info.town : info.street || info.town;
-            if (!worthLookingUp) return centre;
+            if (!(osm ? info.town : info.street || info.town)) return centre;
             onMiss = centre;
             near = info.zip.at;
             maxKm = 80; // rural ZIP areas can be ~100 km across
         } else if (info.zipConflict) {
             if (!info.town) return "conflict";
-            text = info.queryNoCode; // the town decides; the ZIP is wrong or belongs to another state
+            key = info.queryNoCode; // the town decides; the ZIP is wrong or belongs to another state
             onMiss = "conflict";
         } else if (info.ca && info.caCentre) {
             const centre: Located = { at: info.caCentre, approx: { kind: "fsa", code: info.ca.fsa } };
+            if (osm && !info.town) return centre; // OpenStreetMap doesn't know Canadian postal codes
+            if (osm) key = info.queryNoCode;
             onMiss = centre;
             near = info.caCentre;
             maxKm = info.ca.fsa[1] === "0" ? 250 : 80; // a 0 in the 2nd character is a rural area, often huge
-            // OpenStreetMap doesn't know Canadian postal codes: look up the town without it, or use the area centre
-            if (osm) {
-                if (!info.town) return centre;
-                text = info.queryNoCode;
-            }
-        }
-        if (parts) {
-            parts = { ...parts };
-            if (parts.street) parts.street = withoutPoBoxes(parts.street);
-            if (!parts.street) delete parts.street;
-            if (info.region && parts.state) parts.state = info.region.name; // "TX" -> "Texas" matches reliably
-            if (info.zip && parts.postalcode) parts.postalcode = info.zip.code;
-            if ((osm && info.ca) || info.zipConflict) delete parts.postalcode;
         }
 
-        const key = cacheKey(cfg, text);
-        const found = this.geocoder.lookup(key);
+        const k = cacheKey(cfg, key);
+        const found = this.geocoder.lookup(k);
         if (found === undefined) {
             const stopped = this.geocoder.stop || (cfg.provider === "azure" && !cfg.azureKey);
             // Still hand unplaceable rows to the geocoder when stopped, so it can say why (e.g. no Azure key)
             if (!stopped || !onMiss) {
-                queue.set(key, {
-                    key, text, parts,
+                queue.set(k, {
+                    key: k,
+                    text: osm ? key : this.azureText(info, key),
+                    parts: null,
+                    attempts: osm ? this.osmAttempts(info, loc) : undefined,
                     expect: info.region ? info.region.iso : undefined,
                     expectName: info.region ? info.region.name : undefined,
-                    country: info.country || undefined
+                    country: info.country || undefined,
+                    near,
+                    maxKm
                 });
             }
             return stopped && onMiss ? onMiss : "waiting";
@@ -651,6 +641,38 @@ export class Visual implements IVisual {
         if (found === null) return onMiss;
         if (near && distanceKm(found, near) > maxKm) return onMiss;
         return { at: found, approx: null };
+    }
+
+    /** Street + town, street name + town, then town, as structured OpenStreetMap searches */
+    private osmAttempts(info: PlaceInfo, loc: RowLocation): GeoAttempt[] {
+        const state = info.region ? info.region.name : undefined;
+        const ask = (p: Partial<Record<GeoPart, string>>): GeoAttempt => ({ parts: state ? { ...p, state } : p });
+        const attempts: GeoAttempt[] = [];
+        const street = info.streetText;
+        const town = info.townText;
+        if (street && town) {
+            attempts.push(ask({ street, city: town }));
+            const bare = withoutHouseNumber(street);
+            if (bare && bare !== street) attempts.push(ask({ street: bare, city: town }));
+        }
+        if (town) attempts.push(ask({ city: town }));
+        if (!attempts.length && street && !info.zip && !info.ca) attempts.push(ask({ street }));
+        if (!attempts.length) {
+            // Nothing recognisable: the Location fields as given, or the cleaned-up text
+            const parts = loc.parts ? { ...loc.parts } : null;
+            if (parts && parts.street) parts.street = withoutPoBoxes(parts.street);
+            attempts.push(parts && Object.values(parts).some(Boolean) ? { parts } : { text: info.query });
+        }
+        return attempts;
+    }
+
+    /** Azure Maps reads free text best in the usual order: street, town, state ZIP, country */
+    private azureText(info: PlaceInfo, fallback: string): string {
+        if (!info.streetText && !info.townText) return fallback;
+        const code = info.zip ? info.zip.code : info.ca ? fallback.match(/[A-Z]\d[A-Z] ?\d[A-Z]\d/i)?.[0] || "" : "";
+        const state = info.region ? `${info.region.code} ${code}`.trim() : code;
+        const country = info.country === "US" ? "USA" : info.country === "CA" ? "Canada" : "";
+        return [info.streetText, info.townText, state, country].filter(Boolean).join(", ");
     }
 
     private placeCache = new Map<string, PlaceInfo>();
