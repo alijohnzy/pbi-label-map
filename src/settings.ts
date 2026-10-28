@@ -361,9 +361,16 @@ class GeocodingCard extends Card {
         value: ""
     });
 
+    refresh = new formattingSettings.ToggleSwitch({
+        name: "refresh",
+        displayName: "Look up all locations again",
+        description: "Forgets the locations saved in the report and finds them all again (switches itself back off). Use after fixing data, or if points look stuck in the wrong place.",
+        value: false
+    });
+
     name = "geocoding";
     displayName = "Geocoding";
-    slices: Slice[] = [this.provider, this.countries];
+    slices: Slice[] = [this.provider, this.countries, this.refresh];
 }
 
 class ServicesCard extends Card {

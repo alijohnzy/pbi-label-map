@@ -11,6 +11,7 @@ import worldTopo from "world-atlas/countries-110m.json";
 import "leaflet/dist/leaflet.css";
 import "./../style/visual.less";
 
+import pbivizJson from "../pbiviz.json";
 import { VisualFormattingSettingsModel, LEGEND_SLOTS, LegendColorItem, REGION_NAME_BASEMAPS } from "./settings";
 import { REGIONS, Region, inRegionBox } from "./regions";
 import { Geocoder, GeoAttempt, GeoConfig, GeoPart, GeoQuery, GeoProvider, cacheKey, parseCountries } from "./geocoder";
@@ -114,8 +115,8 @@ function tileUrl(def: TileDef, keys: MapKeys): string {
 }
 
 interface Approx {
-    /** Canadian postal area (first 3 characters) or US ZIP code */
-    kind: "fsa" | "zip";
+    /** Canadian postal area (first 3 characters), US ZIP code, or a whole state/province */
+    kind: "fsa" | "zip" | "region";
     code: string;
     /** The ZIP as written, when it had to be read generously ("561756") */
     read?: string;
@@ -124,6 +125,8 @@ interface Approx {
 interface Located {
     at: [number, number];
     approx: Approx | null;
+    /** For the tooltip's "Placed by" line */
+    how: string;
 }
 
 interface MapPoint {
@@ -145,6 +148,8 @@ interface MapPoint {
     textTip?: L.Tooltip;
 }
 
+/** Shown in the yellow note, so it's clear which version a report is running */
+const VERSION = String(pbivizJson.visual.version).replace(/\.0$/, "");
 const TILE_ERROR_THRESHOLD = 3;
 const GEO_RENDER_MS = 800; // redraw at most this often while locations stream in
 const GEO_FIT_MS = 4000; // and re-zoom at most this often
@@ -211,6 +216,8 @@ export class Visual implements IVisual {
     private geoWaiting = 0;
     private geoNotFound: string[] = [];
     private geoApprox = 0;
+    /** Rows that only name a state/province, placed at its centre */
+    private geoRegionOnly: string[] = [];
     /** Rows whose ZIP is in a different state than the row says, e.g. "US, TX, 54214" -> "54214 is in WI" */
     private geoConflicts: string[] = [];
     private textOrder: MapPoint[] = [];
@@ -314,7 +321,17 @@ export class Visual implements IVisual {
 
             // Geocodes are saved into the report only while editing (Desktop, or Edit in the service)
             this.canPersist = options.viewMode === ViewMode.Edit || options.viewMode === ViewMode.InFocusEdit;
-            this.loadSavedGeocodes(dataView);
+            if (this.settings.geocoding.refresh.value && this.canPersist) {
+                // "Look up all locations again": forget everything and save an empty cache; the switch turns itself off
+                this.geocoder.clearAll();
+                this.placeCache.clear();
+                this.loadedCache = "";
+                this.host.persistProperties({
+                    merge: [{ objectName: "geocoding", selector: null, properties: { cache: "", refresh: false } }]
+                });
+            } else {
+                this.loadSavedGeocodes(dataView);
+            }
             this.lastDataView = dataView || null;
             this.renderData(true);
 
@@ -429,6 +446,7 @@ export class Visual implements IVisual {
         const conflicts = new Map<string, string>();
         let waiting = 0;
         let approxCount = 0;
+        const regionOnly = new Set<string>();
 
         this.legendIds = new Map();
         const identities = table.rows.map((row, i) => {
@@ -450,6 +468,7 @@ export class Visual implements IVisual {
 
             // Latitude/Longitude win when the row has them; otherwise geocode the Location text
             let approx: Approx | null = null;
+            let placedBy = "";
             if (!hasLatLon) {
                 if (!loc) {
                     this.skippedRows++;
@@ -471,7 +490,9 @@ export class Visual implements IVisual {
                 }
                 [lat, lon] = coords.at;
                 approx = coords.approx;
+                placedBy = coords.how;
                 if (approx && approx.kind === "fsa") approxCount++;
+                if (approx && approx.kind === "region") regionOnly.add(loc.text);
             }
 
             const name = loc ? loc.text : null;
@@ -519,10 +540,9 @@ export class Visual implements IVisual {
                 radius,
                 color,
                 identity: identities[i],
-                tooltip: approx
+                tooltip: placedBy
                     ? [...this.buildTooltip(row, cols, [...locIs, legendI, labelI, sizeI, btI, ...tooltipIs]),
-                        { displayName: "Placed at", value: approx.kind === "fsa" ? `Postal area ${approx.code} (approximate)`
-                            : approx.read ? `ZIP code ${approx.code} area (read from ${approx.read})` : `ZIP code ${approx.code} area` }]
+                        { displayName: "Placed by", value: placedBy }]
                     : this.buildTooltip(row, cols, [...locIs, legendI, labelI, sizeI, btI, ...tooltipIs])
             });
         });
@@ -531,6 +551,7 @@ export class Visual implements IVisual {
         this.geoNotFound = [...notFound];
         this.geoConflicts = [...conflicts].map(([text, why]) => `${text} (${why})`);
         this.geoApprox = approxCount;
+        this.geoRegionOnly = [...regionOnly];
         this.geocoder.request([...toGeocode.values()], geoCfg);
         return points;
     }
@@ -617,13 +638,25 @@ export class Visual implements IVisual {
     private locate(loc: RowLocation, cfg: GeoConfig, queue: Map<string, GeoQuery>): Located | "waiting" | "conflict" | null {
         const info = this.placeInfo(loc);
         const osm = cfg.provider === "osm";
+        // Only a state/province ("PQ, CA", "TX, US"): its centre, like Azure Maps does; a lookup can only do worse
+        if (info.region && !info.zip && !info.zipConflict && !info.ca && !info.street && !info.town) {
+            return {
+                at: [info.region.lat, info.region.lon],
+                approx: { kind: "region", code: info.region.code },
+                how: `${info.region.name} (centre, approximate: the row has nothing more specific)`
+            };
+        }
         let key = info.query;
         let onMiss: Located | "conflict" | null = null;
         let near: [number, number] | undefined;
         let maxKm: number | undefined;
 
         if (info.zip) {
-            const centre: Located = { at: info.zip.at, approx: { kind: "zip", code: info.zip.code, read: info.zip.read } };
+            const centre: Located = {
+                at: info.zip.at,
+                approx: { kind: "zip", code: info.zip.code, read: info.zip.read },
+                how: `ZIP code ${info.zip.code} area` + (info.zip.read ? ` (read from ${info.zip.read})` : "")
+            };
             if (!(osm ? info.town : info.street || info.town)) return centre;
             onMiss = centre;
             near = info.zip.at;
@@ -633,7 +666,11 @@ export class Visual implements IVisual {
             key = info.queryNoCode; // the town decides; the ZIP is wrong or belongs to another state
             onMiss = "conflict";
         } else if (info.ca && info.caCentre) {
-            const centre: Located = { at: info.caCentre, approx: { kind: "fsa", code: info.ca.fsa } };
+            const centre: Located = {
+                at: info.caCentre,
+                approx: { kind: "fsa", code: info.ca.fsa },
+                how: `Postal area ${info.ca.fsa} (approximate)`
+            };
             if (osm && !info.town) return centre; // OpenStreetMap doesn't know Canadian postal codes
             if (osm) key = info.queryNoCode;
             onMiss = centre;
@@ -665,7 +702,8 @@ export class Visual implements IVisual {
         }
         if (found === null) return onMiss;
         if (near && distanceKm(found, near) > maxKm) return onMiss;
-        return { at: found, approx: null };
+        const service = osm ? "OpenStreetMap" : "Azure Maps";
+        return { at: found, approx: null, how: this.geocoder.isSaved(k) ? `${service} (saved in the report)` : service };
     }
 
     /** Street + town, street name + town, then town, as structured OpenStreetMap searches */
@@ -1254,6 +1292,11 @@ export class Visual implements IVisual {
             const more = this.geoConflicts.length > 3 ? ` and ${this.geoConflicts.length - 3} more` : "";
             msgs.push(`${this.geoConflicts.length} location(s) not placed because the ZIP or postal code is in a different state/province than the row says: ${list}${more}. Fix the code or the state/province, or add Latitude/Longitude.`);
         }
+        if (this.geoRegionOnly.length) {
+            const list = this.geoRegionOnly.slice(0, 3).join("; ");
+            const more = this.geoRegionOnly.length > 3 ? ` and ${this.geoRegionOnly.length - 3} more` : "";
+            msgs.push(`${this.geoRegionOnly.length} location(s) only name a state/province, so they're placed at its centre: ${list}${more}.`);
+        }
         if (this.geoApprox > 0) {
             const osm = this.settings && String(this.settings.geocoding.provider.value.value) === "osm";
             msgs.push(osm
@@ -1270,7 +1313,7 @@ export class Visual implements IVisual {
         if (this.skippedRows > 0) {
             msgs.push(`${this.skippedRows} row(s) skipped: no Location and no valid Latitude/Longitude.`);
         }
-        this.noticeEl.textContent = msgs.join("  ");
+        this.noticeEl.textContent = msgs.length ? `${msgs.join("  ")}  (Label Map ${VERSION})` : "";
         this.noticeEl.style.display = msgs.length ? "block" : "none";
     }
 }

@@ -49,12 +49,15 @@ Fields with a data category (City, State or Province, Postal Code, Country, Addr
 - A result from OpenStreetMap that lands in a different state or province than the row says is rejected, so "Paris, TX" can't end up in Paris, Maine. The country the row names is also passed to the lookup.
 - **US ZIP codes** are placed at the ZIP's centre from a bundled table of about 42,000 ZIPs, with no lookup, when the Location has nothing more specific than the town (e.g. `US TX 79035`, `Friona, TX 79035`). With a street address the address is looked up, and kept only if it's within 80 km of the ZIP's centre. Tooltips say "Placed at: ZIP code ... area".
 - The number right after the state is read generously: ZIP+4 without the dash (`561751234`), a lost leading zero (`2134` for `02134`, common in Excel exports) and an extra digit (`561756` as `56175`). Tooltips show what it was read from.
-- Each comma-separated part is read as country, state, ZIP, street, town or PO box. PO boxes, rural routes and unit numbers (`PO Box 249`, `P. O. Box 251`, `RR 2 Site 5 Comp 10`, `Suite 100`) are left out of lookups.
+- Each comma-separated part is read as country, state, ZIP, street, town or PO box. PO boxes, rural routes and unit numbers (`PO Box 249`, `P. O. Box 251`, `C.P. 123`, `RR 2 Site 5 Comp 10`, `Suite 100`) are left out of lookups.
 - **Street and town first.** OpenStreetMap is asked, in order: street + town (`10232 Hunter School Rd`, `Marine`, Illinois), the street name without the house number + town (house numbers are often missing from OpenStreetMap), then the town alone. The first answer in the right state, and near the row's ZIP or postal area when it has one, wins; if none does, the row goes to its ZIP or postal-area centre. Without a town, a street alone isn't looked up, since a ZIP centre is closer than a guess at "80th Ave" somewhere in the state. Each extra try costs a second, only for rows the earlier try missed.
 - A garbled ZIP field (`US, IL, 6221, ...`) is ignored rather than looked up.
 - State names inside street names (`311 NW California Street`) and the direction `NE` (`123 Main St NE`) aren't read as states.
 - **ZIP or postal code in another state/province** (`US, TX, 54214` — 54214 is in Wisconsin; `CA, PQ, S0K 1A0` — S is Saskatchewan): with a town, the town is looked up and the code ignored; without one the row isn't placed, and the yellow note lists it so the data can be fixed.
 - Locations saved in the report by an older version are checked against the row's state/province when the report opens; any that sit outside it are looked up again and the corrected spot is saved.
+- **Only a state or province** (`PQ, CA`, `TX, US`): placed at its centre, like Azure Maps does, and listed in the yellow note as approximate.
+- Every looked-up point's tooltip has a **Placed by** line: the service, "saved in the report", a ZIP or postal-area centre, or a state/province centre.
+- *Format → Geocoding → Look up all locations again* forgets the saved locations and finds them all again, then switches itself off. Use it after fixing data. The yellow note ends with the visual's version, so you can tell which one a report is running.
 - A bare `CA` means Canada next to a province or postal code, and California next to `US` or a California ZIP.
 - Old and abbreviated province forms are read too: `PQ`/`P.Q.`/`Que.` (Québec), `NF`/`LB`/`Nfld.` (Newfoundland and Labrador), `YK` (Yukon), `B.C.`, `N.S.`, `N.B.`, `Sask.`, `Alta.`, `Man.`, `Ont.`. French street names (`Rue Principale`, `Rang 3`) count as streets, and `St.` at the start of a town (`St. John's`) means Saint.
 
@@ -110,7 +113,7 @@ Note: packaging uses `--all-locales` because powerbi-visuals-utils-formattinguti
 - `src/visual.ts` — rendering, labels, overlap hiding, selection, tooltips
 - `src/geocoder.ts` — Location lookups (Nominatim, Azure Maps batch), rate limiting, cache
 - `src/places.ts` — reads country, state, ZIP/postal code and street from Location text
-- `src/postal.ts`, `src/data/caFsa.json` — Canadian postal-area centres (from the BSD-licensed `zipcodes` npm package, Canada data originally from AggData)
+- `src/postal.ts`, `src/data/caFsa.json` — Canadian postal-area centres (from the BSD-licensed `zipcodes` npm package, Canada data originally from AggData; 10 entries with zero or swapped coordinates were dropped)
 - `src/usZip.ts`, `src/data/usZip.json` — US ZIP centres (same `zipcodes` package, US data from federalgovernmentzipcodes.us)
 - `src/regions.ts`, `src/data/regions.json` — US state and Canadian province names, codes and label points (Natural Earth, public domain)
 - `tools/build-geo-data.mjs` — rebuilds `usZip.json` and `regions.json` from those sources

@@ -109,6 +109,25 @@ export class Geocoder {
         }
     }
 
+    /** Result came from the report's saved cache rather than a lookup this session */
+    public isSaved(key: string): boolean {
+        return this.saved.has(key);
+    }
+
+    /** Forgets everything, saved or not, so every location is looked up again */
+    public clearAll() {
+        this.hits.clear();
+        this.misses.clear();
+        this.saved.clear();
+        this.pending.clear();
+        this.stop = "";
+        this.failures = 0;
+        this.lastError = "";
+        this.done = 0;
+        this.total = 0;
+        this.newHits = 0;
+    }
+
     /**
      * Drops a saved result that fails a check older versions didn't make (e.g. wrong province), so it's
      * looked up again. Only saved results: one found this session already passed the checks.

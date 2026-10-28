@@ -47,7 +47,7 @@ const DIRECTIONS = new Set(["n", "s", "e", "w", "ne", "nw", "se", "sw", "north",
 
 /** PO boxes, rural routes, units: things a geocoder can't place */
 const NOT_A_PLACE = new RegExp([
-    "\\b(?:p\\.?\\s*o\\.?\\s*box|post\\s+office\\s+box|box|r\\.?\\s*r\\.?|rural\\s+route|h\\.?\\s*c\\.?|site|comp|s\\.?\\s*s\\.?|suite|ste|unit|apt|lot)\\s*#?\\s*\\d+[a-z]?\\b",
+    "\\b(?:p\\.?\\s*o\\.?\\s*box|post\\s+office\\s+box|box|c\\.?\\s*p\\.?|case\\s+postale|casier\\s+postal|r\\.?\\s*r\\.?|rural\\s+route|h\\.?\\s*c\\.?|site|comp|s\\.?\\s*s\\.?|suite|ste|unit|apt|lot)\\s*#?\\s*\\d+[a-z]?\\b",
     "#\\s*\\d+[a-z]?\\b",
     "\\bgeneral\\s+delivery\\b"
 ].join("|"), "gi");
@@ -209,6 +209,7 @@ export function analyzeLocation(text: string, stateField?: string | null, countr
     // What's left in each comma-separated part: a street, a town, or nothing (state, country, PO box)
     const streets: string[] = [];
     const towns: string[] = [];
+    let houseNumber = ""; // "12, Boul. Arthur-Sauvé": a number on its own belongs to the next part
     for (const part of noCode.split(/[,;]/)) {
         let cleaned = part.replace(NOT_A_PLACE, " ").replace(COUNTRY_WORDS, " ");
         // The state as its own part ("Texas", "Que.", "P.Q."), or its code anywhere ("TX 79035", "PQ");
@@ -217,13 +218,22 @@ export function analyzeLocation(text: string, stateField?: string | null, countr
         if (region && regionFromField(cleaned.trim(), country) === region) cleaned = "";
         const toks = cleaned.split(/\s+/).map(t => t.replace(/^[.\-#:]+|[.\-#:]+$/g, "")).filter(Boolean);
         if (!toks.length) continue;
+        if (toks.length === 1 && /^\d+[a-z]?$/i.test(toks[0])) {
+            houseNumber = toks[0];
+            continue;
+        }
+        if (houseNumber) {
+            toks.unshift(houseNumber);
+            houseNumber = "";
+        }
         const lower = toks.map(t => t.toLowerCase().replace(/\.$/, ""));
         // A street word after a name ("Main St"), not first in the part: "St. John's" is a town
         const lastStreetWord = lower.reduce((at, x, i) => (i > 0 && STREET_WORDS.has(x) ? i : at), -1);
         if (toks.some(t => /\d/.test(t)) || lastStreetWord >= 0 || (toks.length > 1 && FRENCH_STREET_START.has(lower[0]))) {
             // "123 Main St Brooks": words after the street name (other than N/E/S/W) are a town
             let end = lastStreetWord >= 0 ? lastStreetWord + 1 : toks.length;
-            while (end < toks.length && DIRECTIONS.has(lower[end])) end++;
+            // keep what belongs to the street: "Main St NE", "Rte 132", "Hwy 9 N"
+            while (end < toks.length && (DIRECTIONS.has(lower[end]) || /^\d+[a-z]?$/i.test(toks[end]))) end++;
             const tail = toks.slice(end).filter(t => !/\d/.test(t));
             streets.push(toks.slice(0, lastStreetWord >= 0 ? end : toks.length).join(" "));
             if (lastStreetWord >= 0 && tail.length) towns.push(tail.join(" "));
