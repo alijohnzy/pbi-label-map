@@ -46,6 +46,7 @@ Fields with a data category (City, State or Province, Postal Code, Country, Addr
 **State and ZIP checks.** The visual reads the country, state/province (`TX`, `Texas`, `AB`), US ZIP and Canadian postal code out of each Location first:
 - A result from OpenStreetMap that lands in a different state or province than the row says is rejected, so "Paris, TX" can't end up in Paris, Maine. The country the row names is also passed to the lookup.
 - **US ZIP codes** are placed at the ZIP's centre from a bundled table of about 42,000 ZIPs, with no lookup, when the Location has nothing more specific than the town (e.g. `US TX 79035`, `Friona, TX 79035`). With a street address the address is looked up, and kept only if it's within 80 km of the ZIP's centre. Tooltips say "Placed at: ZIP code ... area".
+- ZIPs are also recognized as ZIP+4 without the dash (`561751234`) and without a lost leading zero (`2134` for `02134`, common in Excel exports) when they come after the state.
 - A bare `CA` means Canada next to a province or postal code, and California next to `US` or a California ZIP.
 
 **Canadian postal codes.** Codes typed with a letter O for zero (`TOJ 3EO`) are read as `T0J 3E0`. OpenStreetMap has almost no Canadian postal codes (Canada Post owns that data), so with OpenStreetMap:
