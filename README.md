@@ -57,7 +57,7 @@ Fields with a data category (City, State or Province, Postal Code, Country, Addr
 - Locations saved in the report by an older version are checked against the row's state/province when the report opens; any that sit outside it are looked up again and the corrected spot is saved.
 - **Only a state or province** (`PQ, CA`, `TX, US`): placed at its centre, like Azure Maps does, and listed in the yellow note as approximate.
 - Every looked-up point's tooltip has a **Placed by** line: the service, "saved in the report", a ZIP or postal-area centre, or a state/province centre.
-- *Format → Geocoding → Look up all locations again* forgets the saved locations and finds them all again, then switches itself off. Use it after fixing data. The yellow note ends with the visual's version, so you can tell which one a report is running.
+- **Look up all locations again:** the ↻ button under the zoom buttons (shown only while editing; click, then click again to confirm) or *Format → Geocoding → Look up all locations again* forgets the saved locations and finds them all again. Use it after fixing data. The yellow note ends with the visual's version, so you can tell which one a report is running.
 - A bare `CA` means Canada next to a province or postal code, and California next to `US` or a California ZIP.
 - Old and abbreviated province forms are read too: `PQ`/`P.Q.`/`Que.` (Québec), `NF`/`LB`/`Nfld.` (Newfoundland and Labrador), `YK` (Yukon), `B.C.`, `N.S.`, `N.B.`, `Sask.`, `Alta.`, `Man.`, `Ont.`. French street names (`Rue Principale`, `Rang 3`) count as streets, and `St.` at the start of a town (`St. John's`) means Saint.
 

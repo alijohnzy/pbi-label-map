@@ -230,6 +230,11 @@ export class Visual implements IVisual {
     private legendActive = new Set<string>();
     /** Every row's selection id per Legend value, placed or not, so a legend click selects them all */
     private legendIds = new Map<string, ISelectionId[]>();
+    /** "Look up all locations again" button on the map, shown while editing */
+    private refreshControl: L.Control | null = null;
+    private refreshConfirmTimer = 0;
+    /** Set after a re-lookup until the emptied cache comes back, so the old one isn't loaded again */
+    private ignoreSavedCache = false;
     /** Biggest first, so they win label collisions */
     private regionMarks: Array<{ region: Region; marker: L.Marker }> = [];
 
@@ -321,14 +326,10 @@ export class Visual implements IVisual {
 
             // Geocodes are saved into the report only while editing (Desktop, or Edit in the service)
             this.canPersist = options.viewMode === ViewMode.Edit || options.viewMode === ViewMode.InFocusEdit;
+            const hasLocation = !!(dataView && dataView.table && dataView.table.columns.some(c => c.roles && c.roles.location));
+            this.showRefreshButton(this.canPersist && hasLocation && this.allowInteractions);
             if (this.settings.geocoding.refresh.value && this.canPersist) {
-                // "Look up all locations again": forget everything and save an empty cache; the switch turns itself off
-                this.geocoder.clearAll();
-                this.placeCache.clear();
-                this.loadedCache = "";
-                this.host.persistProperties({
-                    merge: [{ objectName: "geocoding", selector: null, properties: { cache: "", refresh: false } }]
-                });
+                this.lookUpAllAgain(true); // Format pane switch; it turns itself off
             } else {
                 this.loadSavedGeocodes(dataView);
             }
@@ -775,10 +776,77 @@ export class Visual implements IVisual {
         this.geoAttribution = text;
     }
 
+    /**
+     * Forgets every found location, saved or not, and looks them all up again. While editing, the emptied
+     * cache is saved too, so the report doesn't bring the old spots back.
+     */
+    private lookUpAllAgain(resetSwitch: boolean) {
+        this.geocoder.clearAll();
+        this.placeCache.clear();
+        this.loadedCache = "";
+        this.ignoreSavedCache = true;
+        if (this.canPersist) {
+            const properties: Record<string, powerbi.DataViewPropertyValue> = { cache: "" };
+            if (resetSwitch) properties.refresh = false;
+            this.host.persistProperties({ merge: [{ objectName: "geocoding", selector: null, properties }] });
+        }
+        if (!resetSwitch) this.renderData(true);
+    }
+
+    /** Map button under the zoom buttons: first click asks, second click within 4 s runs it */
+    private showRefreshButton(on: boolean) {
+        if (on && !this.refreshControl) {
+            const control = new L.Control({ position: "topleft" });
+            control.onAdd = () => {
+                const box = L.DomUtil.create("div", "leaflet-bar plm-refresh");
+                L.DomEvent.disableClickPropagation(box);
+                const btn = L.DomUtil.create("a", "", box) as HTMLAnchorElement;
+                btn.href = "#";
+                btn.setAttribute("role", "button");
+                btn.title = "Look up all locations again";
+                btn.setAttribute("aria-label", btn.title);
+                const icon = "http://www.w3.org/2000/svg";
+                const svg = document.createElementNS(icon, "svg");
+                svg.setAttribute("viewBox", "0 0 24 24");
+                svg.setAttribute("width", "16");
+                svg.setAttribute("height", "16");
+                const path = document.createElementNS(icon, "path");
+                path.setAttribute("d", "M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z");
+                path.setAttribute("fill", "currentColor");
+                svg.appendChild(path);
+                btn.appendChild(svg);
+                const text = L.DomUtil.create("span", "plm-refresh-text", btn);
+                text.textContent = "Look up all again? Click to confirm";
+                L.DomEvent.on(btn, "click", (e: Event) => {
+                    L.DomEvent.preventDefault(e);
+                    if (box.classList.contains("plm-confirm")) {
+                        window.clearTimeout(this.refreshConfirmTimer);
+                        box.classList.remove("plm-confirm");
+                        this.lookUpAllAgain(false);
+                    } else {
+                        box.classList.add("plm-confirm");
+                        this.refreshConfirmTimer = window.setTimeout(() => box.classList.remove("plm-confirm"), 4000);
+                    }
+                });
+                return box;
+            };
+            control.addTo(this.map);
+            this.refreshControl = control;
+        } else if (!on && this.refreshControl) {
+            this.refreshControl.remove();
+            this.refreshControl = null;
+        }
+    }
+
     private loadSavedGeocodes(dataView: DataView | undefined) {
         const objects = dataView && dataView.metadata && dataView.metadata.objects;
         const saved = objects && objects.geocoding && objects.geocoding.cache;
         const text = typeof saved === "string" ? saved : "";
+        if (this.ignoreSavedCache) {
+            // After "look up all again": skip the old cache until the emptied one (or ours) comes back
+            if (!text || text === this.loadedCache) this.ignoreSavedCache = false;
+            return;
+        }
         if (text && text !== this.loadedCache) {
             this.geocoder.load(text);
             this.loadedCache = text;
@@ -991,8 +1059,10 @@ export class Visual implements IVisual {
             this.setBasemap(id, keys);
         }
 
-        if (m.zoomControl.value) this.zoomControl.addTo(this.map);
-        else this.zoomControl.remove();
+        // Only add when missing: re-adding would move the zoom buttons below the re-lookup button
+        const zoomShown = !!(this.zoomControl.getContainer() && this.zoomControl.getContainer().parentNode);
+        if (m.zoomControl.value && !zoomShown) this.zoomControl.addTo(this.map);
+        else if (!m.zoomControl.value && zoomShown) this.zoomControl.remove();
 
         this.root.classList.toggle("plm-grey", m.greyscale.value);
         this.showRegionNames(m.regionNames.value && REGION_NAME_BASEMAPS.has(this.basemapKey));
