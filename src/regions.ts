@@ -34,10 +34,21 @@ for (const r of REGIONS) {
     (r.iso.startsWith("US-") ? US_CODES : CA_CODES).set(r.code, r);
     NAMES.set(fold(r.name), r);
 }
+// Old two-letter codes still common in Canadian data: PQ (Québec), NF/LB (Newfoundland/Labrador), YK (Yukon)
+const CODE_ALIASES: Record<string, string> = { PQ: "CA-QC", NF: "CA-NL", LB: "CA-NL", YK: "CA-YT" };
+for (const [code, iso] of Object.entries(CODE_ALIASES)) {
+    const r = REGIONS.find(x => x.iso === iso);
+    if (r) CA_CODES.set(code, r);
+}
+// Other spellings, matched case-insensitively as whole words. Short ones that are also ordinary
+// words or towns ("Man", "Alta") only count with their dot.
 const ALIASES: Record<string, string> = {
     "washington dc": "US-DC", "washington d.c.": "US-DC", "d.c.": "US-DC",
-    "pei": "CA-PE", "p.e.i.": "CA-PE", "newfoundland": "CA-NL", "labrador": "CA-NL",
-    "nwt": "CA-NT", "yukon territory": "CA-YT", "northwest territory": "CA-NT"
+    "pei": "CA-PE", "p.e.i.": "CA-PE", "newfoundland": "CA-NL", "labrador": "CA-NL", "nfld": "CA-NL", "nfld.": "CA-NL",
+    "nwt": "CA-NT", "n.w.t.": "CA-NT", "yukon territory": "CA-YT", "northwest territory": "CA-NT", "y.t.": "CA-YT",
+    "quebec": "CA-QC", "que": "CA-QC", "que.": "CA-QC", "p.q.": "CA-QC", "province of quebec": "CA-QC",
+    "b.c.": "CA-BC", "n.s.": "CA-NS", "n.b.": "CA-NB", "n.l.": "CA-NL",
+    "sask": "CA-SK", "sask.": "CA-SK", "alta.": "CA-AB", "man.": "CA-MB", "ont": "CA-ON", "ont.": "CA-ON"
 };
 for (const [alias, iso] of Object.entries(ALIASES)) {
     const r = REGIONS.find(x => x.iso === iso);
@@ -53,6 +64,7 @@ export function regionByIso(iso: string): Region | null {
 /** A state/province field value: "TX", "Texas", "AB", "Alberta" */
 export function regionFromField(value: string, country: "US" | "CA" | ""): Region | null {
     const v = value.trim();
+    if (!v) return null;
     const up = v.toUpperCase();
     if (country !== "CA" && US_CODES.has(up)) return US_CODES.get(up);
     if (country !== "US" && CA_CODES.has(up)) return CA_CODES.get(up);

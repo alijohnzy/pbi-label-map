@@ -219,6 +219,10 @@ export class Visual implements IVisual {
     private legendSlots: string[] = [];
     private legendSlotsSaved = "";
     private regionLayer: L.LayerGroup;
+    /** Legend values switched on by clicking the legend; empty = no legend filter */
+    private legendActive = new Set<string>();
+    /** Every row's selection id per Legend value, placed or not, so a legend click selects them all */
+    private legendIds = new Map<string, ISelectionId[]>();
     /** Biggest first, so they win label collisions */
     private regionMarks: Array<{ region: Region; marker: L.Marker }> = [];
 
@@ -264,6 +268,8 @@ export class Visual implements IVisual {
 
         this.map.on("click", () => {
             if (!this.allowInteractions) return;
+            this.legendActive.clear();
+            this.styleLegend();
             this.selectionManager.clear().then(() => this.applySelection([]));
         });
         this.map.on("contextmenu", (e: L.LeafletMouseEvent) => {
@@ -272,7 +278,12 @@ export class Visual implements IVisual {
         });
         this.map.on("zoomend moveend resize", () => this.queueDeclutter());
 
-        this.selectionManager.registerOnSelectCallback((ids: ISelectionId[]) => this.applySelection(ids));
+        this.selectionManager.registerOnSelectCallback((ids: ISelectionId[]) => {
+            // Selection changed from outside (bookmark, another visual): the legend filter no longer applies
+            this.legendActive.clear();
+            this.styleLegend();
+            this.applySelection(ids);
+        });
     }
 
     public update(options: VisualUpdateOptions) {
@@ -419,6 +430,18 @@ export class Visual implements IVisual {
         let waiting = 0;
         let approxCount = 0;
 
+        this.legendIds = new Map();
+        const identities = table.rows.map((row, i) => {
+            const id = this.host.createSelectionIdBuilder().withTable(table, i).createSelectionId();
+            if (legendI >= 0 && row[legendI] != null) {
+                const key = String(row[legendI]);
+                const list = this.legendIds.get(key);
+                if (list) list.push(id);
+                else this.legendIds.set(key, [id]);
+            }
+            return id;
+        });
+
         table.rows.forEach((row, i) => {
             const loc = locationOf(row, cols, locIs);
             let lat = latI >= 0 ? toNumber(row[latI]) : null;
@@ -495,7 +518,7 @@ export class Visual implements IVisual {
                 priority: Number.isFinite(priorityRaw) ? Math.abs(priorityRaw) : 0,
                 radius,
                 color,
-                identity: this.host.createSelectionIdBuilder().withTable(table, i).createSelectionId(),
+                identity: identities[i],
                 tooltip: approx
                     ? [...this.buildTooltip(row, cols, [...locIs, legendI, labelI, sizeI, btI, ...tooltipIs]),
                         { displayName: "Placed at", value: approx.kind === "fsa" ? `Postal area ${approx.code} (approximate)`
@@ -662,15 +685,24 @@ export class Visual implements IVisual {
             const parts = loc.parts ? { ...loc.parts } : null;
             if (parts && parts.street) parts.street = withoutPoBoxes(parts.street);
             attempts.push(parts && Object.values(parts).some(Boolean) ? { parts } : { text: info.query });
+        } else {
+            // Last try: plain text in the usual order, in case the street/town split was off
+            attempts.push({ text: this.plainText(info, false) || info.query });
         }
         return attempts;
     }
 
     /** Azure Maps reads free text best in the usual order: street, town, state ZIP, country */
     private azureText(info: PlaceInfo, fallback: string): string {
-        if (!info.streetText && !info.townText) return fallback;
-        const code = info.zip ? info.zip.code : info.ca ? fallback.match(/[A-Z]\d[A-Z] ?\d[A-Z]\d/i)?.[0] || "" : "";
-        const state = info.region ? `${info.region.code} ${code}`.trim() : code;
+        return this.plainText(info, true) || fallback;
+    }
+
+    /** "street, town, ST ZIP, country"; empty when there's no street or town. Canadian postal codes only for Azure. */
+    private plainText(info: PlaceInfo, withPostal: boolean): string {
+        if (!info.streetText && !info.townText) return "";
+        const postal = info.zip ? info.zip.code
+            : info.ca && withPostal ? (info.query.match(/\b[A-Z]\d[A-Z] ?\d[A-Z]\d\b/i) || [""])[0] : "";
+        const state = `${info.region ? info.region.code : ""} ${postal}`.trim();
         const country = info.country === "US" ? "USA" : info.country === "CA" ? "Canada" : "";
         return [info.streetText, info.townText, state, country].filter(Boolean).join(", ");
     }
@@ -1016,6 +1048,20 @@ export class Visual implements IVisual {
                     break;
                 }
                 const row = L.DomUtil.create("div", "plm-legend-row", box);
+                row.dataset.value = label;
+                if (this.allowInteractions) {
+                    row.classList.add("plm-legend-click");
+                    row.setAttribute("role", "button");
+                    row.tabIndex = 0;
+                    row.title = "Click to show this one; click others to add them, or again to remove";
+                    row.addEventListener("click", () => this.toggleLegend(label));
+                    row.addEventListener("keydown", (e: KeyboardEvent) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            this.toggleLegend(label);
+                        }
+                    });
+                }
                 const sw = L.DomUtil.create("span", "plm-swatch", row);
                 sw.style.background = color;
                 const text = L.DomUtil.create("span", "", row);
@@ -1025,6 +1071,7 @@ export class Visual implements IVisual {
         };
         control.addTo(this.map);
         this.legendControl = control;
+        this.styleLegend();
     }
 
     private fitIfNeeded() {
@@ -1111,15 +1158,48 @@ export class Visual implements IVisual {
     private onPointClick(p: MapPoint, ev: MouseEvent) {
         if (!this.allowInteractions) return;
         const multi = ev.ctrlKey || ev.metaKey || ev.shiftKey;
+        this.legendActive.clear();
+        this.styleLegend();
         this.selectionManager.select(p.identity, multi).then((ids: ISelectionId[]) => this.applySelection(ids));
+    }
+
+    /**
+     * Legend click: switches that value on or off, so several can be picked without Ctrl. The picked values'
+     * rows are selected, which dims the rest here and cross-filters the other visuals, like Azure Maps.
+     */
+    private toggleLegend(value: string) {
+        if (!this.allowInteractions) return;
+        if (this.legendActive.has(value)) this.legendActive.delete(value);
+        else this.legendActive.add(value);
+        this.styleLegend();
+        if (!this.legendActive.size) {
+            this.selectionManager.clear().then(() => this.applySelection([]));
+            return;
+        }
+        const ids: ISelectionId[] = [];
+        for (const v of this.legendActive) ids.push(...(this.legendIds.get(v) || []));
+        this.selectionManager.select(ids, false).then((sel: ISelectionId[]) => this.applySelection(sel));
+    }
+
+    private styleLegend() {
+        if (!this.legendControl) return;
+        const box = this.legendControl.getContainer();
+        if (!box) return;
+        const any = this.legendActive.size > 0;
+        box.querySelectorAll<HTMLElement>(".plm-legend-row").forEach(row => {
+            const on = this.legendActive.has(row.dataset.value);
+            row.classList.toggle("plm-legend-off", any && !on);
+            row.setAttribute("aria-pressed", String(on));
+        });
     }
 
     private applySelection(ids: ISelectionId[]) {
         const any = ids && ids.length > 0;
+        const keys = new Set(any ? ids.map(id => id.getKey()) : []);
         const base = this.settings ? this.settings.bubbles.opacity.value / 100 : 0.8;
         for (const p of this.points) {
             if (!p.marker) continue;
-            const selected = !any || ids.some(id => id.equals(p.identity));
+            const selected = !any || keys.has(p.identity.getKey());
             p.marker.setStyle({ fillOpacity: selected ? base : base * 0.2, opacity: selected ? 1 : 0.3 });
             const el = p.marker.getTooltip() && p.marker.getTooltip().getElement();
             if (el) el.style.opacity = selected ? "1" : "0.35";

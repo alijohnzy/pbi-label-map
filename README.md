@@ -29,6 +29,8 @@ Leaflet point map with the Azure Maps field wells (Location, Latitude, Longitude
 
 Legend colors: up to 60 legend values get their own picker and keep their color through filters and new data; any beyond that use theme colors.
 
+**Legend filter:** click a legend entry to show only that one; click others to add them, or click one again to remove it (no Ctrl needed). The picked entries' points stay bright, the rest dim, and the other visuals on the page filter to them, like Azure Maps. Clicking empty map clears it.
+
 Click a point to filter other visuals, Ctrl/⌘-click to multi-select, click empty map to clear, right-click for the context menu.
 
 ## Geocoding (Location field)
@@ -53,6 +55,7 @@ Fields with a data category (City, State or Province, Postal Code, Country, Addr
 - State names inside street names (`311 NW California Street`) and the direction `NE` (`123 Main St NE`) aren't read as states.
 - **ZIP in another state** (`US, TX, 54214` — 54214 is in Wisconsin): with a town, the town is looked up and the ZIP ignored; without one the row isn't placed, and the yellow note lists it so the data can be fixed.
 - A bare `CA` means Canada next to a province or postal code, and California next to `US` or a California ZIP.
+- Old and abbreviated province forms are read too: `PQ`/`P.Q.`/`Que.` (Québec), `NF`/`LB`/`Nfld.` (Newfoundland and Labrador), `YK` (Yukon), `B.C.`, `N.S.`, `N.B.`, `Sask.`, `Alta.`, `Man.`, `Ont.`. French street names (`Rue Principale`, `Rang 3`) count as streets, and `St.` at the start of a town (`St. John's`) means Saint.
 
 **Canadian postal codes.** Codes typed with a letter O for zero (`TOJ 3EO`) are read as `T0J 3E0`. OpenStreetMap has almost no Canadian postal codes (Canada Post owns that data), so with OpenStreetMap:
 - A location that's only a postal code plus province/country (e.g. `CA AB T0J 3E0`) is placed at the centre of its postal area, the first three characters (FSA), from a bundled table of 1,620 areas. No lookup is needed, so it's instant. Rural areas (a 0 in the second character, like T0J) are large, so several dealers can land on the same spot.

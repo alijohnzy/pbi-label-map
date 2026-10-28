@@ -40,6 +40,8 @@ const STREET_WORDS = new Set([
     "ter", "terrace", "sq", "square", "cres", "crescent", "cv", "loop", "pike", "rte", "route", "fwy",
     "expy", "freeway", "xing", "crossing", "grove", "gr", "close", "gate", "line", "concession", "sideroad"
 ]);
+/** French street words come first: "Rue Principale", "Chemin du Lac", "Rang 3" */
+const FRENCH_STREET_START = new Set(["rue", "chemin", "ch", "boul", "boulevard", "rang", "montee", "montée", "cote", "côte", "avenue", "av", "route", "rte", "place", "allee", "allée", "impasse"]);
 const DIRECTIONS = new Set(["n", "s", "e", "w", "ne", "nw", "se", "sw", "north", "south", "east", "west"]);
 
 /** PO boxes, rural routes, units: things a geocoder can't place */
@@ -198,14 +200,16 @@ export function analyzeLocation(text: string, stateField?: string | null, countr
     const towns: string[] = [];
     for (const part of noCode.split(/[,;]/)) {
         let cleaned = part.replace(NOT_A_PLACE, " ").replace(COUNTRY_WORDS, " ");
-        // The state as its own part ("Texas"), or its code anywhere ("TX 79035"); not "Oklahoma" in "Oklahoma City"
-        if (region) cleaned = cleaned.replace(new RegExp(`\\b${region.code}\\b`, "g"), " ");
-        if (region && fold(cleaned.trim()) === fold(region.name)) cleaned = "";
+        // The state as its own part ("Texas", "Que.", "P.Q."), or its code anywhere ("TX 79035", "PQ");
+        // not "Oklahoma" in "Oklahoma City"
+        if (region) cleaned = cleaned.replace(/\b[A-Z]{2}\b/g, code => (regionFromField(code, country) === region ? " " : code));
+        if (region && regionFromField(cleaned.trim(), country) === region) cleaned = "";
         const toks = cleaned.split(/\s+/).map(t => t.replace(/^[.\-#:]+|[.\-#:]+$/g, "")).filter(Boolean);
         if (!toks.length) continue;
         const lower = toks.map(t => t.toLowerCase().replace(/\.$/, ""));
-        const lastStreetWord = lower.reduce((at, x, i) => (STREET_WORDS.has(x) ? i : at), -1);
-        if (toks.some(t => /\d/.test(t)) || lastStreetWord >= 0) {
+        // A street word after a name ("Main St"), not first in the part: "St. John's" is a town
+        const lastStreetWord = lower.reduce((at, x, i) => (i > 0 && STREET_WORDS.has(x) ? i : at), -1);
+        if (toks.some(t => /\d/.test(t)) || lastStreetWord >= 0 || (toks.length > 1 && FRENCH_STREET_START.has(lower[0]))) {
             // "123 Main St Brooks": words after the street name (other than N/E/S/W) are a town
             let end = lastStreetWord >= 0 ? lastStreetWord + 1 : toks.length;
             while (end < toks.length && DIRECTIONS.has(lower[end])) end++;
@@ -235,9 +239,6 @@ export function analyzeLocation(text: string, stateField?: string | null, countr
     };
 }
 
-function fold(s: string): string {
-    return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-}
 
 /** "10232 Hunter School Rd" -> "Hunter School Rd", for when the house number isn't on the map */
 export function withoutHouseNumber(street: string): string {
