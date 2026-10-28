@@ -91,18 +91,21 @@ export class Geocoder {
         return entries.map(([k, [la, lo]]) => `${k}\t${la.toFixed(6)}\t${lo.toFixed(6)}`).join("\n");
     }
 
+    /** Applies the current settings. A change (e.g. switching service) clears the queue and any stop. */
+    public configure(cfg: GeoConfig) {
+        if (this.cfg && JSON.stringify(this.cfg) === JSON.stringify(cfg)) return;
+        this.pending.clear();
+        this.stop = "";
+        this.failures = 0;
+        this.lastError = "";
+        this.done = 0;
+        this.total = 0;
+        this.cfg = cfg;
+    }
+
     /** Queues lookups that aren't cached, pending or known misses, and starts the worker */
     public request(queries: GeoQuery[], cfg: GeoConfig) {
-        const cfgChanged = !this.cfg || JSON.stringify(this.cfg) !== JSON.stringify(cfg);
-        if (cfgChanged) {
-            this.pending.clear();
-            this.stop = "";
-            this.failures = 0;
-            this.lastError = "";
-            this.done = 0;
-            this.total = 0;
-            this.cfg = cfg;
-        }
+        this.configure(cfg);
         if (this.stop) return;
         if (cfg.provider === "azure" && !cfg.azureKey) {
             if (queries.some(q => this.lookup(q.key) === undefined)) this.stop = "noKey";

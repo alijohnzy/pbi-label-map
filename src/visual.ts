@@ -11,7 +11,7 @@ import worldTopo from "world-atlas/countries-110m.json";
 import "leaflet/dist/leaflet.css";
 import "./../style/visual.less";
 
-import { VisualFormattingSettingsModel } from "./settings";
+import { VisualFormattingSettingsModel, LEGEND_SLOTS, LegendColorItem } from "./settings";
 import { Geocoder, GeoConfig, GeoPart, GeoQuery, GeoProvider, cacheKey, parseCountries } from "./geocoder";
 import { findCanadianPostal, fsaCentre } from "./postal";
 
@@ -199,6 +199,9 @@ export class Visual implements IVisual {
     private geoApprox = 0;
     private textOrder: MapPoint[] = [];
     private lastAzureKeyLegacy = "";
+    /** Legend value per color slot (bubbles.c0, c1, ...), saved in the report as bubbles.legendSlots */
+    private legendSlots: string[] = [];
+    private legendSlotsSaved = "";
 
     constructor(options: VisualConstructorOptions) {
         this.host = options.host;
@@ -336,6 +339,7 @@ export class Visual implements IVisual {
         const legendI = roleIndex("legend");
         const labelI = roleIndex("labelValue");
         const sizeI = roleIndex("size");
+        const btI = roleIndex("bubbleText");
         const tooltipIs = cols.map((c, i) => (c.roles && c.roles.tooltips ? i : -1)).filter(i => i >= 0);
         this.hasSizeField = sizeI >= 0;
 
@@ -343,11 +347,16 @@ export class Visual implements IVisual {
         const labelCol = labelI >= 0 ? cols[labelI] : null;
         const labelNumeric = !!(labelCol && labelCol.type && (labelCol.type.numeric || labelCol.type.integer));
 
+        const btCol = btI >= 0 ? cols[btI] : null;
+        const btNumeric = !!(btCol && btCol.type && (btCol.type.numeric || btCol.type.integer));
+
         let maxAbsLabel = 0;
         let maxAbsSize = 0;
+        let maxAbsBt = 0;
         for (const row of table.rows) {
             if (labelNumeric) maxAbsLabel = Math.max(maxAbsLabel, Math.abs(Number(row[labelI]) || 0));
             if (sizeI >= 0) maxAbsSize = Math.max(maxAbsSize, Math.abs(Number(row[sizeI]) || 0));
+            if (btNumeric) maxAbsBt = Math.max(maxAbsBt, Math.abs(Number(row[btI]) || 0));
         }
 
         const l = s.labels;
@@ -356,12 +365,19 @@ export class Visual implements IVisual {
             ? this.makeFormatter(labelCol, maxAbsLabel, l.displayUnits.value, l.decimals.value.value) : null;
         const sizeCol = sizeI >= 0 ? cols[sizeI] : null;
         const sizeNumeric = !!(sizeCol && sizeCol.type && (sizeCol.type.numeric || sizeCol.type.integer));
-        const btContent = bt.show.value ? String(bt.content.value.value) : "";
-        const btFormatter = btContent === "size" && sizeNumeric
-            ? this.makeFormatter(sizeCol, maxAbsSize, bt.displayUnits.value, bt.decimals.value.value)
-            : btContent === "label" && labelNumeric
-                ? this.makeFormatter(labelCol, maxAbsLabel, bt.displayUnits.value, bt.decimals.value.value)
-                : null;
+        // "Bubble text field" falls back to the Size value while the Bubble text well is empty
+        let btContent = bt.show.value ? String(bt.content.value.value) : "";
+        if (btContent === "field" && btI < 0) btContent = "size";
+        const btUnits = bt.displayUnits.value;
+        const btDecimals = bt.decimals.value.value;
+        const btFormatter = btContent === "field" && btNumeric
+            ? this.makeFormatter(btCol, maxAbsBt, btUnits, btDecimals)
+            : btContent === "size" && sizeNumeric
+                ? this.makeFormatter(sizeCol, maxAbsSize, btUnits, btDecimals)
+                : btContent === "label" && labelNumeric
+                    ? this.makeFormatter(labelCol, maxAbsLabel, btUnits, btDecimals)
+                    : null;
+        const btSourceCol = btContent === "field" ? btCol : btContent === "size" ? sizeCol : labelCol;
         const palette = this.host.colorPalette;
         const highContrast = palette.isHighContrast;
         const baseColor = highContrast ? palette.foreground.value : s.bubbles.fill.value.value;
@@ -372,6 +388,8 @@ export class Visual implements IVisual {
         const points: MapPoint[] = [];
         this.skippedRows = 0;
         const geoCfg = this.geoConfig();
+        this.geocoder.configure(geoCfg); // before locate(), so a changed service clears an old stop
+        const legendColors = this.legendColors(dataView, legendI, highContrast);
         const toGeocode = new Map<string, GeoQuery>();
         const notFound = new Set<string>();
         let waiting = 0;
@@ -417,13 +435,14 @@ export class Visual implements IVisual {
             const labelText = composeLabel(content, name, valueText);
 
             let bubbleText = "";
-            const rawBt = btContent === "size" ? (sizeI >= 0 ? row[sizeI] : null)
-                : btContent === "label" ? rawLabel
-                    : btContent === "location" ? name : null;
+            const rawBt = btContent === "field" ? row[btI]
+                : btContent === "size" ? (sizeI >= 0 ? row[sizeI] : null)
+                    : btContent === "label" ? rawLabel
+                        : btContent === "location" ? name : null;
             if (rawBt != null && rawBt !== "") {
                 bubbleText = btFormatter ? btFormatter.format(rawBt)
                     : btContent === "location" ? String(rawBt)
-                        : formatValue(rawBt, btContent === "size" ? sizeCol : labelCol, this.host.locale);
+                        : formatValue(rawBt, btSourceCol, this.host.locale);
             }
 
             let radius = s.bubbles.radius.value;
@@ -432,7 +451,7 @@ export class Visual implements IVisual {
                 radius = maxAbsSize > 0 ? minR + (maxR - minR) * Math.sqrt(v / maxAbsSize) : minR;
             }
 
-            const color = legend !== null && !highContrast ? palette.getColor(legend).value : baseColor;
+            const color = legend !== null && !highContrast ? legendColors.get(legend) || baseColor : baseColor;
 
             const priorityRaw = labelNumeric ? Number(rawLabel) : sizeI >= 0 ? Number(row[sizeI]) : 0;
 
@@ -449,17 +468,85 @@ export class Visual implements IVisual {
                 color,
                 identity: this.host.createSelectionIdBuilder().withTable(table, i).createSelectionId(),
                 tooltip: approx
-                    ? [...this.buildTooltip(row, cols, [...locIs, legendI, labelI, sizeI, ...tooltipIs]),
+                    ? [...this.buildTooltip(row, cols, [...locIs, legendI, labelI, sizeI, btI, ...tooltipIs]),
                         { displayName: "Placed at", value: `Postal area ${approx} (approximate)` }]
-                    : this.buildTooltip(row, cols, [...locIs, legendI, labelI, sizeI, ...tooltipIs])
+                    : this.buildTooltip(row, cols, [...locIs, legendI, labelI, sizeI, btI, ...tooltipIs])
             });
         });
 
         this.geoWaiting = waiting;
         this.geoNotFound = [...notFound];
         this.geoApprox = approxCount;
-        if (toGeocode.size) this.geocoder.request([...toGeocode.values()], geoCfg);
+        this.geocoder.request([...toGeocode.values()], geoCfg);
         return points;
+    }
+
+    // ---------- legend colors ----------
+
+    /**
+     * Color per Legend value: the one picked in Format → Bubbles → Colors, else the theme color.
+     * Each value keeps a numbered slot (saved as bubbles.legendSlots) so its color survives
+     * filtering and new values; colors are stored as bubbles.c0, c1, ...
+     */
+    private legendColors(dataView: DataView, legendI: number, highContrast: boolean): Map<string, string> {
+        const colors = new Map<string, string>();
+        const bubbles = this.settings.bubbles;
+        if (legendI < 0) {
+            bubbles.setLegendColors([]);
+            return colors;
+        }
+        const values = new Set<string>();
+        for (const row of dataView.table.rows) {
+            if (row[legendI] != null) values.add(String(row[legendI]));
+        }
+        const sorted = [...values].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+
+        const objects = dataView.metadata && dataView.metadata.objects;
+        const saved = (objects && objects.bubbles) || {};
+        const savedText = typeof saved.legendSlots === "string" ? saved.legendSlots : "";
+        // Keep slots added while viewing (they can't be saved then) until the report's list changes
+        let slots = savedText === this.legendSlotsSaved && this.legendSlots.length ? [...this.legendSlots] : parseSlots(savedText);
+        const picked = (slot: number): string | null => {
+            const fill = saved[`c${slot}`] as powerbi.Fill | undefined;
+            return fill && fill.solid && fill.solid.color ? fill.solid.color : null;
+        };
+
+        let changed = false;
+        for (const v of sorted) {
+            if (slots.includes(v)) continue;
+            if (slots.length < LEGEND_SLOTS) {
+                slots.push(v);
+                changed = true;
+                continue;
+            }
+            // All slots used: take one whose value isn't on the map now and has no picked color
+            const free = slots.findIndex((old, k) => !values.has(old) && !picked(k));
+            if (free >= 0) {
+                slots[free] = v;
+                changed = true;
+            }
+        }
+        this.legendSlots = slots;
+        this.legendSlotsSaved = savedText;
+        if (changed && this.canPersist) {
+            const text = JSON.stringify(slots);
+            this.legendSlotsSaved = text;
+            this.host.persistProperties({
+                merge: [{ objectName: "bubbles", selector: null, properties: { legendSlots: text } }]
+            });
+        }
+
+        const palette = this.host.colorPalette;
+        const items: LegendColorItem[] = [];
+        for (const v of sorted) {
+            const theme = palette.getColor(v).value; // asked in sorted order so theme colors stay put
+            const slot = slots.indexOf(v);
+            const color = (slot >= 0 && picked(slot)) || theme;
+            colors.set(v, color);
+            if (slot >= 0) items.push({ slot, label: v, color });
+        }
+        bubbles.setLegendColors(highContrast ? [] : items);
+        return colors;
     }
 
     // ---------- geocoding ----------
@@ -489,7 +576,8 @@ export class Visual implements IVisual {
         const key = cacheKey(cfg, text);
         const found = this.geocoder.lookup(key);
         if (found === undefined) {
-            if (this.geocoder.stop && centre) return { at: centre, approx: ca.fsa };
+            const stopped = this.geocoder.stop || (cfg.provider === "azure" && !cfg.azureKey);
+            if (stopped && centre) return { at: centre, approx: ca.fsa };
             queue.set(key, { key, text, parts });
             return "waiting";
         }
@@ -782,11 +870,13 @@ export class Visual implements IVisual {
         const s = this.settings;
         if (!s || !s.legend.show.value) return;
 
-        const entries = new Map<string, string>();
+        const found = new Map<string, string>();
         for (const p of this.points) {
-            if (p.legend !== null && !entries.has(p.legend)) entries.set(p.legend, p.color);
+            if (p.legend !== null && !found.has(p.legend)) found.set(p.legend, p.color);
         }
-        if (!entries.size) return;
+        if (!found.size) return;
+        const entries = new Map([...found].sort((a, b) =>
+            a[0].localeCompare(b[0], undefined, { numeric: true, sensitivity: "base" })));
 
         const control = new L.Control({ position: String(s.legend.position.value.value) as L.ControlPosition });
         control.onAdd = () => {
@@ -995,6 +1085,16 @@ function locationOf(row: PrimitiveValue[], cols: DataViewMetadataColumn[], locIs
     }
     if (!values.length) return null;
     return { text: values.join(", "), parts: structured ? parts : null };
+}
+
+function parseSlots(text: string): string[] {
+    if (!text) return [];
+    try {
+        const list = JSON.parse(text);
+        return Array.isArray(list) ? list.map(v => String(v)).slice(0, LEGEND_SLOTS) : [];
+    } catch {
+        return [];
+    }
 }
 
 function toNumber(v: PrimitiveValue): number | null {

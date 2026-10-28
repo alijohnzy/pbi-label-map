@@ -1,6 +1,6 @@
 # Label Map (Power BI custom visual)
 
-Leaflet point map with the Azure Maps field wells (Location, Latitude, Longitude, Legend, Size, Tooltips) plus **Label value**, which prints any measure or column on each point. Location text is geocoded; Latitude/Longitude override it per row. Cross-filters like a normal visual.
+Leaflet point map with the Azure Maps field wells (Location, Latitude, Longitude, Legend, Size, Tooltips) plus **Label value** and **Bubble text**, which print any measure or column on each point. Location text is geocoded; Latitude/Longitude override it per row. Cross-filters like a normal visual.
 
 **Download:** grab the `.pbiviz` from the [latest release](https://github.com/alijohnzy/pbi-label-map/releases/latest). No Node or build tools needed to use it.
 
@@ -13,18 +13,21 @@ Leaflet point map with the Azure Maps field wells (Location, Latitude, Longitude
 |---|---|
 | Location | Address, city, postal code, state or country. Up to 5 fields (e.g. City, Province, Country) are combined into one lookup. Also used as the point's name in labels and tooltips. |
 | Latitude / Longitude | Optional. Rows that have them skip geocoding, so you can mix both. |
-| Legend | Optional category. Uses the report theme colors. |
-| Size | Optional measure; bubble area scales between Min and Max size. Its value is printed inside the bubble by default (see Bubble text). |
-| Label value | The number or text printed on each point. Measures respond to slicers. For a text column pick First/Last. |
+| Legend | Optional category. Each value gets its own color picker in *Format → Bubbles → Colors* (theme colors until you pick one). |
+| Size | Optional measure; bubble area scales between Min and Max size. Printed inside the bubble when Bubble text is empty. |
+| Label value | The number or text printed next to each point (the label). Measures respond to slicers. For a text column pick First/Last. |
+| Bubble text | Optional. The number or text printed inside each bubble, e.g. a dealer code or a count, separate from Label value. |
 | Tooltips | Extra fields for the hover tooltip. Report page tooltips work too. |
 
-3. Format pane: **Map** (base map, greyscale, auto-zoom on filter, zoom buttons, wheel zoom), **Bubbles**, **Bubble text**, **Labels** (content, position, display units, decimals, text style, background/halo, hide overlapping), **Legend**, **Geocoding**, **Map service keys**.
+3. Format pane: **Map** (base map, greyscale, auto-zoom on filter, zoom buttons, wheel zoom), **Bubbles** (Colors per legend value, Size, Style), **Bubble text**, **Labels** (content, position, display units, decimals, text style, background/halo, hide overlapping), **Legend**, **Geocoding**, **Map service keys**.
 
    Each point can carry two texts at once:
-   - **Bubble text** is drawn inside the node: the Size value by default, or the Label value or Location. It has its own display units, decimals, text size, bold and color (*Auto text color* picks white or dark per bubble). *Grow bubbles to fit text* enlarges bubbles until the longest text fits, keeping their size order; turn it off to keep exact sizes.
+   - **Bubble text** is drawn inside the node: the Bubble text field (or the Size value while that well is empty), or pick Size value, Label value or Location. It has its own display units, decimals, text size, bold and color (*Auto text color* picks white or dark per bubble). *Grow bubbles to fit text* enlarges bubbles until the longest text fits, keeping their size order; turn it off to keep exact sizes.
    - **Labels** sit outside the node (above, below, left or right): the Label value, Location, or both.
 
    When texts collide, *Hide overlapping labels* keeps bubble texts first, then the labels with the largest values.
+
+Legend colors: up to 60 legend values get their own picker and keep their color through filters and new data; any beyond that use theme colors.
 
 Click a point to filter other visuals, Ctrl/⌘-click to multi-select, click empty map to clear, right-click for the context menu.
 
@@ -40,7 +43,7 @@ Found coordinates are saved into the report while you're editing (Desktop, or Ed
 
 Fields with a data category (City, State or Province, Postal Code, Country, Address) are sent as a structured lookup to OpenStreetMap, which is more accurate than free text.
 
-**Canadian postal codes.** OpenStreetMap has almost no Canadian postal codes (Canada Post owns that data), so with OpenStreetMap:
+**Canadian postal codes.** Codes typed with a letter O for zero (`TOJ 3EO`) are read as `T0J 3E0`. OpenStreetMap has almost no Canadian postal codes (Canada Post owns that data), so with OpenStreetMap:
 - A location that's only a postal code plus province/country (e.g. `CA AB T0J 3E0`) is placed at the centre of its postal area, the first three characters (FSA), from a bundled table of 1,620 areas. No lookup is needed, so it's instant. Rural areas (a 0 in the second character, like T0J) are large, so several dealers can land on the same spot.
 - A location with a town or street too (e.g. `Brooks, AB T1R 0A1`) is looked up without the postal code, so it lands on the town.
 - Anything that still isn't found falls back to its postal area.

@@ -43,6 +43,7 @@ export const LABEL_POSITION: powerbi.IEnumMember[] = [
 ];
 
 export const BUBBLE_TEXT_CONTENT: powerbi.IEnumMember[] = [
+    { value: "field", displayName: "Bubble text field" },
     { value: "size", displayName: "Size value" },
     { value: "label", displayName: "Label value" },
     { value: "location", displayName: "Location" }
@@ -104,10 +105,20 @@ class MapCard extends Card {
     slices: Slice[] = [this.basemap, this.greyscale, this.autoFit, this.zoomControl, this.wheelZoom];
 }
 
-class BubblesCard extends Card {
+/** Legend values that get their own color picker; the rest use theme colors */
+export const LEGEND_SLOTS = 60;
+
+export interface LegendColorItem {
+    /** Slot number: the color is saved as bubbles.c<slot> */
+    slot: number;
+    label: string;
+    color: string;
+}
+
+class BubblesCard extends formattingSettings.CompositeCard {
     fill = new formattingSettings.ColorPicker({
         name: "fill",
-        displayName: "Color",
+        displayName: "Default color",
         description: "Used when nothing is in Legend",
         value: { value: "#1f6feb" }
     });
@@ -148,12 +159,36 @@ class BubblesCard extends Card {
         options: range(0, 10)
     });
 
+    colors = new formattingSettings.Group({
+        name: "bubbleColors",
+        displayName: "Colors",
+        slices: [this.fill]
+    });
+    size = new formattingSettings.Group({
+        name: "bubbleSize",
+        displayName: "Size",
+        slices: [this.radius, this.minRadius, this.maxRadius]
+    });
+    style = new formattingSettings.Group({
+        name: "bubbleStyle",
+        displayName: "Style",
+        slices: [this.opacity, this.strokeColor, this.strokeWidth]
+    });
+
     name = "bubbles";
     displayName = "Bubbles";
-    slices: Slice[] = [
-        this.fill, this.radius, this.minRadius, this.maxRadius,
-        this.opacity, this.strokeColor, this.strokeWidth
-    ];
+    groups = [this.colors, this.size, this.style];
+
+    /** One color picker per Legend value, like Azure Maps; Default color only matters without a Legend */
+    setLegendColors(items: LegendColorItem[]) {
+        const pickers = items.map(item => new formattingSettings.ColorPicker({
+            name: `c${item.slot}`,
+            displayName: item.label,
+            value: { value: item.color }
+        }));
+        this.fill.visible = items.length === 0;
+        this.colors.slices = [this.fill, ...pickers];
+    }
 }
 
 class LabelsCard extends Card {
@@ -240,7 +275,7 @@ class BubbleTextCard extends Card {
     content = new formattingSettings.ItemDropdown({
         name: "content",
         displayName: "Show",
-        description: "Text drawn inside each bubble, separate from the label",
+        description: "Text drawn inside each bubble, separate from the label. Bubble text field uses the Bubble text well, or the Size value when that well is empty.",
         items: BUBBLE_TEXT_CONTENT,
         value: BUBBLE_TEXT_CONTENT[0]
     });
