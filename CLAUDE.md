@@ -5,12 +5,11 @@ Leaflet point map for Power BI with Azure Maps style field wells, value labels o
 - Repo: https://github.com/alijohnzy/pbi-label-map (public). Releases carry the `.pbiviz`; the user downloads it at work from Releases → Latest.
 - Current version: **1.7.3** (released). Visual GUID `pbiLabelMap7379A3103AC7452ABE93F1A12B992918`; keep it so imports replace the old visual and reports keep their settings.
 - The user (John) builds at home on this Mac. Work IT blocks LLMs and Node, so the work PC only imports the finished `.pbiviz`.
-- `CLAUDE.md` and `tests/` were added after 1.7.3; commit them first.
 
 ## Build, preview, release
 
 ```bash
-npm install
+npm install         # brings pbiviz (powerbi-visuals-tools 7.2.1) and Playwright as devDependencies
 npm run package     # dist/<GUID>.<version>.pbiviz  (needs --all-locales, already in the script)
 npm run preview     # package + copy visual.js/css into preview/ for the browser preview and tests
 npm run lint
@@ -77,7 +76,7 @@ Nothing has been tested inside real Power BI by Claude; all checks ran in headle
 
 ```bash
 npm run preview                      # builds preview/visual.js used by the harness
-npx -y playwright@1.49.1 install chromium   # once
+npx playwright install chromium      # once
 node tests/check.mjs                 # prints PASS/FAIL per check
 ```
 

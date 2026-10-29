@@ -1,5 +1,5 @@
 // Browser checks for Label Map: run `npm run preview` first, then `node tests/check.mjs`.
-// Needs Playwright with Chromium: `npx -y playwright@1.49.1 install chromium` once.
+// Needs Playwright's Chromium: `npx playwright install chromium` once.
 // tests/harness.html loads preview/visual.js with a fake Power BI host and a mocked Nominatim.
 import { createRequire } from "module";
 import { fileURLToPath, pathToFileURL } from "url";
