@@ -19,7 +19,7 @@ Leaflet point map with the Azure Maps field wells (Location, Latitude, Longitude
 | Bubble text | Optional. The number or text printed inside each bubble, e.g. a dealer code or a count, separate from Label value. |
 | Tooltips | Extra fields for the hover tooltip. Report page tooltips work too. |
 
-3. Format pane: **Map** (base map, greyscale, state and province names, auto-zoom on filter, zoom buttons, wheel zoom), **Bubbles** (Colors per legend value, Size, Style), **Bubble text**, **Labels** (content, position, display units, decimals, text style, background/halo, hide overlapping), **Legend**, **Geocoding**, **Map service keys**.
+3. Format pane: **Map** (base map, greyscale, state and province names, auto-zoom on filter, zoom buttons, wheel zoom), **Bubbles** (Colors per legend value, Size, Style), **Bubble text**, **Labels** (content, position, display units, decimals, text style, background/halo, hide overlapping), **Legend**, **Geocoding**, **Notes on the map** (which messages the yellow note shows), **Map service keys**.
 
    Each point can carry two texts at once:
    - **Bubble text** is drawn inside the node: the Bubble text field (or the Size value while that well is empty), or pick Size value, Label value or Location. It has its own display units, decimals, text size, bold and color (*Auto text color* picks white or dark per bubble). *Grow bubbles to fit text* enlarges bubbles until the longest text fits, keeping their size order; turn it off to keep exact sizes.
@@ -57,6 +57,7 @@ Fields with a data category (City, State or Province, Postal Code, Country, Addr
 - Locations saved in the report by an older version are checked against the row's state/province when the report opens; any that sit outside it are looked up again and the corrected spot is saved.
 - **Only a state or province** (`PQ, CA`, `TX, US`): placed at its centre, like Azure Maps does, and listed in the yellow note as approximate.
 - Every looked-up point's tooltip has a **Placed by** line: the service, "saved in the report", a ZIP or postal-area centre, or a state/province centre.
+- **Hiding the yellow note's messages:** *Format → Notes on the map* has two switches. *Approximate placements* covers rows placed at a state/province or postal-area centre (the tooltip still says so). *Rows not on the map* covers locations that couldn't be found, ZIP or postal codes from another state/province, and rows with no location. Lookup progress and problems with a map service or key always show.
 - **Look up all locations again:** the ↻ button under the zoom buttons (shown only while editing; click, then click again to confirm) or *Format → Geocoding → Look up all locations again* forgets the saved locations and finds them all again. Use it after fixing data. The yellow note ends with the visual's version, so you can tell which one a report is running.
 - A bare `CA` means Canada next to a province or postal code, and California next to `US` or a California ZIP.
 - Old and abbreviated province forms are read too: `PQ`/`P.Q.`/`Que.` (Québec), `NF`/`LB`/`Nfld.` (Newfoundland and Labrador), `YK` (Yukon), `B.C.`, `N.S.`, `N.B.`, `Sask.`, `Alta.`, `Man.`, `Ont.`. French street names (`Rue Principale`, `Rang 3`) count as streets, and `St.` at the start of a town (`St. John's`) means Saint.

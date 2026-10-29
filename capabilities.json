@@ -897,6 +897,20 @@
                 }
             }
         },
+        "notes": {
+            "properties": {
+                "approximate": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "notPlaced": {
+                    "type": {
+                        "bool": true
+                    }
+                }
+            }
+        },
         "services": {
             "properties": {
                 "azureKey": {

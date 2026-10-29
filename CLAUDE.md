@@ -3,7 +3,7 @@
 Leaflet point map for Power BI with Azure Maps style field wells, value labels on each point, a second text inside each bubble, Location geocoding, and US/Canada address handling. Built with `pbiviz` because Power BI's own maps can't print a value on each point.
 
 - Repo: https://github.com/alijohnzy/pbi-label-map (public). Releases carry the `.pbiviz`; the user downloads it at work from Releases → Latest.
-- Current version: **1.7.3** (released). Visual GUID `pbiLabelMap7379A3103AC7452ABE93F1A12B992918`; keep it so imports replace the old visual and reports keep their settings.
+- Current version: **1.7.4** (released). Visual GUID `pbiLabelMap7379A3103AC7452ABE93F1A12B992918`; keep it so imports replace the old visual and reports keep their settings.
 - The user (John) builds at home on this Mac. Work IT blocks LLMs and Node, so the work PC only imports the finished `.pbiviz`.
 
 ## Build, preview, release
@@ -36,7 +36,7 @@ powerbi-visuals-tools 7.2.1, API 5.11.1, powerbi-visuals-utils-formattingmodel 6
 - `src/postal.ts` + `src/data/caFsa.json`: Canadian postal-area (first 3 chars) centres, 1,610 entries.
 - `src/usZip.ts` + `src/data/usZip.json`: ~42,000 US ZIP centres, packed 8 base-36 chars per ZIP.
 - `src/regions.ts` + `src/data/regions.json`: US states and Canadian provinces: codes, names, aliases (PQ, Que., B.C., Nfld. …), label points, bounding boxes, postal-letter → province.
-- `src/settings.ts`: format pane model. Cards: Map, Bubbles (composite: Colors/Size/Style), Bubble text, Labels, Legend, Geocoding, Map service keys.
+- `src/settings.ts`: format pane model. Cards: Map, Bubbles (composite: Colors/Size/Style), Bubble text, Labels, Legend, Geocoding, Notes on the map, Map service keys.
 - `tools/build-geo-data.mjs`: rebuilds usZip.json and regions.json from the `zipcodes` npm package (BSD) and Natural Earth admin-1 50m GeoJSON (public domain).
 - `preview/index.html`: hand-run browser preview with a fake host. `tests/`: automated browser checks (see Testing).
 
@@ -50,7 +50,7 @@ Latitude/Longitude win when present. Otherwise:
 5. Lookups (OpenStreetMap) try in order: street + town, street without house number + town, town, then plain text "street, town, ST ZIP, country". Every result must be in the row's state (Nominatim `ISO3166-2-lvl4`) and near its ZIP/postal area. Azure gets one free-text query in the usual order.
 6. PO boxes, rural routes, C.P., Suite/Unit are never looked up. The number right after the state is read generously as the ZIP: ZIP+4 without dash, lost leading zero (2134 → 02134), extra digit (561756 → 56175). Garbled ZIPs are ignored.
 
-Tooltips show a "Placed by" line. The yellow note lists not-found rows, conflicts, approximate counts, and ends with "(Label Map <version>)".
+Tooltips show a "Placed by" line. The yellow note lists not-found rows, conflicts, approximate counts, and ends with "(Label Map <version>)". Format → Notes on the map (1.7.4, object `notes`) hides the approximate ones (`approximate`: region-only and postal-area centres) and the not-placed ones (`notPlaced`: not found, conflicts, skipped rows). Lookup progress and service/key/tile problems always show; John sees the informational ones as not errors.
 
 ## Caching
 

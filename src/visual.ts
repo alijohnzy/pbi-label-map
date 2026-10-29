@@ -1339,6 +1339,10 @@ export class Visual implements IVisual {
     private updateNotice() {
         const msgs: string[] = [];
         const geo = this.geocoder;
+        // Format → Notes on the map can hide the informational kinds; service and key problems always show
+        const notes = this.settings && this.settings.notes;
+        const showNotPlaced = !notes || notes.notPlaced.value;
+        const showApprox = !notes || notes.approximate.value;
         if (geo.stop) {
             msgs.push(GEO_STOP_TEXT[geo.stop] + (geo.lastError ? ` (${geo.lastError}).` : "."));
         } else if (geo.busy && this.geoWaiting > 0) {
@@ -1352,22 +1356,22 @@ export class Visual implements IVisual {
             const retry = geo.lastError ? ` Last problem: ${geo.lastError}.` : "";
             msgs.push(`Finding locations: ${geo.done} of ${geo.total} (${pace}, ${eta}).${saved}${retry}`);
         }
-        if (this.geoNotFound.length) {
+        if (showNotPlaced && this.geoNotFound.length) {
             const names = this.geoNotFound.slice(0, 3).join("; ");
             const more = this.geoNotFound.length > 3 ? ` and ${this.geoNotFound.length - 3} more` : "";
             msgs.push(`Couldn't find ${this.geoNotFound.length} location(s): ${names}${more}. Add more detail (city, state, country) or Latitude/Longitude.`);
         }
-        if (this.geoConflicts.length) {
+        if (showNotPlaced && this.geoConflicts.length) {
             const list = this.geoConflicts.slice(0, 3).join("; ");
             const more = this.geoConflicts.length > 3 ? ` and ${this.geoConflicts.length - 3} more` : "";
             msgs.push(`${this.geoConflicts.length} location(s) not placed because the ZIP or postal code is in a different state/province than the row says: ${list}${more}. Fix the code or the state/province, or add Latitude/Longitude.`);
         }
-        if (this.geoRegionOnly.length) {
+        if (showApprox && this.geoRegionOnly.length) {
             const list = this.geoRegionOnly.slice(0, 3).join("; ");
             const more = this.geoRegionOnly.length > 3 ? ` and ${this.geoRegionOnly.length - 3} more` : "";
             msgs.push(`${this.geoRegionOnly.length} location(s) only name a state/province, so they're placed at its centre: ${list}${more}.`);
         }
-        if (this.geoApprox > 0) {
+        if (showApprox && this.geoApprox > 0) {
             const osm = this.settings && String(this.settings.geocoding.provider.value.value) === "osm";
             msgs.push(osm
                 ? `${this.geoApprox} location(s) placed at the centre of their postal area (first 3 characters), because OpenStreetMap doesn't have full Canadian postal codes. An Azure Maps key places them exactly.`
@@ -1380,7 +1384,7 @@ export class Visual implements IVisual {
         if (TILES[this.basemapKey] && this.tileStats.loads === 0 && this.tileStats.errors >= TILE_ERROR_THRESHOLD) {
             msgs.push("Map tiles can't load here (web access for custom visuals is likely blocked). Format → Map → Base map → Offline outline still works.");
         }
-        if (this.skippedRows > 0) {
+        if (showNotPlaced && this.skippedRows > 0) {
             msgs.push(`${this.skippedRows} row(s) skipped: no Location and no valid Latitude/Longitude.`);
         }
         this.noticeEl.textContent = msgs.length ? `${msgs.join("  ")}  (Label Map ${VERSION})` : "";

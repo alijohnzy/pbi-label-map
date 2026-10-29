@@ -56,6 +56,30 @@ check("Province only -> province centre", near(by("PQ, CA"), 52.26, -73.72), by(
 check("ZIP from another state is reported, not placed", !by("US, TX, 54214, PO BOX 249") && notice.includes("54214 is in WI"));
 check("Version shown in the note", /\(Label Map \d+\.\d+\.\d+\)/.test(notice));
 
+// Notes on the map: approximate placements and rows not on the map can be switched off
+const noticeText = () => page.evaluate(() => {
+    const el = document.querySelector(".plm-notice");
+    return el.style.display === "none" ? "" : el.textContent;
+});
+check("Notes card in the format pane", await page.evaluate(() => {
+    const card = window.visual.getFormattingModel().cards.find(c => c.displayName === "Notes on the map");
+    const props = card ? card.groups.flatMap(g => g.slices).map(s => s.control.properties.descriptor.propertyName) : [];
+    return props.join(",") === "approximate,notPlaced";
+}));
+await page.evaluate(o => window.doUpdate(o), { map: { basemap: "outline" }, notes: { approximate: false } });
+let text = await noticeText();
+check("Approximate placements can be hidden",
+    !text.includes("only name a state/province") && !text.includes("postal area") && text.includes("54214 is in WI"), text);
+await page.evaluate(o => window.doUpdate(o), { map: { basemap: "outline" }, notes: { notPlaced: false } });
+text = await noticeText();
+check("Rows not on the map can be hidden",
+    !text.includes("54214 is in WI") && text.includes("only name a state/province"), text);
+await page.evaluate(o => window.doUpdate(o), { map: { basemap: "outline" }, notes: { approximate: false, notPlaced: false } });
+check("Note gone when both are off", (await noticeText()) === "", await noticeText());
+await page.evaluate(o => window.doUpdate(o), { map: { basemap: "outline" } });
+text = await noticeText();
+check("Notes back when switched on", text.includes("only name a state/province") && text.includes("54214 is in WI"));
+
 // Legend filter: click toggles, several at once, last click clears
 const legendState = () => page.evaluate(() => [...document.querySelectorAll(".plm-legend-row")]
     .map(r => r.dataset.value + (r.classList.contains("plm-legend-off") ? ":off" : ":on")).join(" "));

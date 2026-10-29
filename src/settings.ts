@@ -373,6 +373,27 @@ class GeocodingCard extends Card {
     slices: Slice[] = [this.provider, this.countries, this.refresh];
 }
 
+/** Which kinds of message the yellow note shows. Service and key problems always show. */
+class NotesCard extends Card {
+    approximate = new formattingSettings.ToggleSwitch({
+        name: "approximate",
+        displayName: "Approximate placements",
+        description: "Rows placed at the centre of their state/province or postal area. Each bubble's tooltip still says how it was placed.",
+        value: true
+    });
+    notPlaced = new formattingSettings.ToggleSwitch({
+        name: "notPlaced",
+        displayName: "Rows not on the map",
+        description: "Locations that couldn't be found, ZIP or postal codes from another state/province, and rows with no location.",
+        value: true
+    });
+
+    name = "notes";
+    displayName = "Notes on the map";
+    description = "The yellow note at the bottom of the map. Lookup progress and problems with a map service or key always show.";
+    slices: Slice[] = [this.approximate, this.notPlaced];
+}
+
 class ServicesCard extends Card {
     azureKey = new formattingSettings.TextInput({
         name: "azureKey",
@@ -421,9 +442,10 @@ export class VisualFormattingSettingsModel extends Model {
     bubbleText = new BubbleTextCard();
     legend = new LegendCard();
     geocoding = new GeocodingCard();
+    notes = new NotesCard();
     services = new ServicesCard();
 
-    cards = [this.map, this.bubbles, this.bubbleText, this.labels, this.legend, this.geocoding, this.services];
+    cards = [this.map, this.bubbles, this.bubbleText, this.labels, this.legend, this.geocoding, this.notes, this.services];
 
     syncVisibility() {
         this.map.syncVisibility();
