@@ -1,0 +1,175 @@
+<!doctype html>
+<!-- Test page: the built visual (npm run preview) with a fake Power BI host and mocked Nominatim. Driven by tests/check.mjs. -->
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../preview/visual.css">
+<style>
+  html, body { margin: 0; background: #fff; }
+  #host { width: 900px; height: 560px; position: relative; }
+</style>
+</head>
+<body>
+<div id="host"></div>
+<script>
+  window.powerbi = { visuals: { plugins: {} } };
+</script>
+<script src="../preview/visual.js"></script>
+<script>
+  const PALETTE = ["#118DFF", "#E66C37", "#6B007B", "#12239E", "#E044A7", "#744EC2"];
+  const paletteMap = {};
+  let paletteNext = 0;
+  window.__log = [];
+  const host = {
+    eventService: {
+      renderingStarted() {},
+      renderingFinished() { window.__rendered = (window.__rendered || 0) + 1; },
+      renderingFailed(o, e) { window.__err = e; }
+    },
+    createSelectionManager() {
+      let sel = [];
+      return {
+        select(id, multi) { const arr = Array.isArray(id) ? id : [id]; sel = multi ? sel.concat(arr) : arr; window.__log.push("select " + arr.length); return Promise.resolve(sel); },
+        clear() { sel = []; window.__log.push("clear"); return Promise.resolve(); },
+        getSelectionIds() { return sel; },
+        registerOnSelectCallback() {},
+        showContextMenu() { return Promise.resolve(); }
+      };
+    },
+    tooltipService: {
+      enabled: () => true,
+      show(o) { window.__tip = o; },
+      move() {},
+      hide() {}
+    },
+    colorPalette: {
+      isHighContrast: false,
+      foreground: { value: "#000" },
+      background: { value: "#fff" },
+      getColor(k) {
+        if (!(k in paletteMap)) paletteMap[k] = PALETTE[paletteNext++ % PALETTE.length];
+        return { value: paletteMap[k] };
+      }
+    },
+    createSelectionIdBuilder() {
+      let row = -1;
+      const b = {
+        withTable(t, i) { row = i; return b; },
+        createSelectionId() {
+          return { __row: row, equals: o => o.__row === row, getKey: () => String(row), includes: o => o.__row === row };
+        }
+      };
+      return b;
+    },
+    locale: "en-US",
+    persistProperties(changes) {
+      window.__persisted.push(changes);
+      for (const inst of changes.merge) {
+        window.__savedObjects[inst.objectName] = Object.assign({}, window.__savedObjects[inst.objectName] || {}, inst.properties);
+      }
+      // Power BI answers a persist with a data update
+      setTimeout(() => window.doUpdate(window.__lastObjects, 2), 0);
+    },
+    hostCapabilities: { allowInteractions: true }
+  };
+
+  // free text q, or structured "street|city|state" (lower case) -> candidates in Nominatim order, with state codes
+  const NOM = {
+    "paris, tx": [{ lat: 44.2598, lon: -70.5009, iso: "US-ME" }, { lat: 33.6609, lon: -95.5555, iso: "US-TX" }],
+    "|paris|texas": [{ lat: 44.2598, lon: -70.5009, iso: "US-ME" }, { lat: 33.6609, lon: -95.5555, iso: "US-TX" }],
+    "100 main st|friona|texas": [{ lat: 44.30, lon: -69.80, iso: "US-ME" }],
+    "|friona|texas": [{ lat: 34.6418, lon: -102.7238, iso: "US-TX" }],
+    "hunter school rd|marine|illinois": [{ lat: 38.8012, lon: -89.7604, iso: "US-IL" }],
+    "|marine|illinois": [{ lat: 38.7867, lon: -89.7787, iso: "US-IL" }],
+    "|austin|texas": [{ lat: 30.2672, lon: -97.7431, iso: "US-TX" }],
+    "|brooks|alberta": [{ lat: 50.5642, lon: -111.8989, iso: "CA-AB" }],
+    "row 5|brooks|alberta": [],
+    "|saint-hyacinthe|québec": [{ lat: 52.13, lon: -106.67, iso: "CA-SK" }, { lat: 45.6307, lon: -72.9566, iso: "CA-QC" }],
+    "|winnipeg|manitoba": [{ lat: 49.8954, lon: -97.1385, iso: "CA-MB" }],
+    "|minneapolis|minnesota": [{ lat: 44.9778, lon: -93.2650, iso: "US-MN" }],
+    "|ontario|california": [{ lat: 34.0633, lon: -117.6509, iso: "US-CA" }]
+  };
+  window.__fetchLog = [];
+  window.fetch = async function (url, init) {
+    window.__fetchLog.push({ url: String(url), method: (init && init.method) || "GET" });
+    await new Promise(r => setTimeout(r, 20));
+    if (String(url).startsWith("https://nominatim.openstreetmap.org/search")) {
+      const u = new URL(url);
+      const sp = u.searchParams;
+      const q = sp.has("q") ? sp.get("q").toLowerCase().replace(/\s+/g, " ").trim()
+        : [sp.get("street") || "", sp.get("city") || "", sp.get("state") || ""].join("|").toLowerCase();
+      const limit = Number(u.searchParams.get("limit") || 1);
+      const details = u.searchParams.get("addressdetails") === "1";
+      const hits = (NOM[q] || []).slice(0, limit).map(h => {
+        const r = { lat: String(h.lat), lon: String(h.lon) };
+        if (details) r.address = { "ISO3166-2-lvl4": h.iso };
+        return r;
+      });
+      return new Response(JSON.stringify(hits), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response("", { status: 404 });
+  };
+
+  const baseRows = [
+    ["US TX 79035", null, null, "US", 900000, 40, "FRI"],
+    ["US, MN, 561751234", null, null, "US", 880000, 39, "TRC"],
+    ["US, TX, 54214, PO BOX 249", null, null, "US", 870500, 37, "X1"],
+    ["US, MN, 55918, 311 NW California Street", null, null, "US", 870400, 37, "BRD"],
+    ["US, MN, 561756, 2088 80th Ave P. O. Box 251", null, null, "US", 870300, 37, "TRC2"],
+    ["Austin, TX 54214", null, null, "US", 870200, 37, "AUS"],
+    ["US, IL, 6221, 10232 Hunter School Rd, Marine", null, null, "US", 870150, 37, "MAR"],
+    ["CA, PQ, Saint-Hyacinthe", null, null, "Canada", 870120, 37, "STH"],
+    ["PQ, CA", null, null, "Canada", 870115, 37, "PQ"],
+    ["CA, PQ, S0K 1A0", null, null, "Canada", 870110, 37, "BAD"],
+    ["CA, PQ, S0K 1A0, Saint-Hyacinthe", null, null, "Canada", 870100, 37, "STH2"],
+    ["CA, AB, T0J 3E0, Box 123", null, null, "Canada", 870100, 37, "BOX"],
+    ["US, MA, 2134", null, null, "US", 870000, 38, "BOS"],
+    ["Friona, TX 79035", null, null, "US", 800000, 30, "FR2"],
+    ["100 Main St, Friona, TX 79035", null, null, "US", 700000, 20, "FR3"],
+    ["Paris, TX", null, null, "US", 600000, 25, "PAR"],
+    ["China, TX, USA", null, null, "US", 500000, 22, "CHN"],
+    ["Ontario, CA 91761", null, null, "US", 400000, 21, "ONT"],
+    ["123 Main St NE, Minneapolis, MN 55401", null, null, "US", 300000, 20, "MSP"],
+    ["CA AB T0J 3E0", null, null, "Canada", 640000, 23, "T0J"],
+    ["CA, AB, TOJ 3EO", null, null, "Canada", 620000, 22, "T0J2"],
+    ["Brooks, AB T1R 0A1", null, null, "Canada", 610000, 21, "BRK"],
+    ["Winnipeg, MB R3C 4T3", null, null, "Canada", 600000, 20, "WPG"]
+  ];
+  window.__rows = baseRows;
+  window.__withBt = true;
+  const allCols = [
+    { displayName: "Location", roles: { location: true }, type: { text: true } },
+    { displayName: "Latitude", roles: { latitude: true }, type: { numeric: true } },
+    { displayName: "Longitude", roles: { longitude: true }, type: { numeric: true } },
+    { displayName: "Region", roles: { legend: true }, type: { text: true } },
+    { displayName: "Sales", roles: { labelValue: true, tooltips: true }, type: { numeric: true }, format: "\\$#,0;(\\$#,0);\\$#,0" },
+    { displayName: "Units", roles: { size: true }, type: { numeric: true }, format: "#,0" },
+    { displayName: "Dealer code", roles: { bubbleText: true }, type: { text: true } }
+  ];
+
+  window.__persisted = [];
+  window.__savedObjects = {};
+  window.makeDataView = function (objects) {
+    const merged = Object.assign({}, objects || {});
+    for (const k in window.__savedObjects) merged[k] = Object.assign({}, merged[k] || {}, window.__savedObjects[k]);
+    const cols = window.__withBt ? allCols : allCols.slice(0, 6);
+    const rows = window.__rows.map(r => window.__withBt ? r : r.slice(0, 6));
+    return { metadata: { columns: cols, objects: merged }, table: { columns: cols, rows } };
+  };
+
+  const element = document.getElementById("host");
+  const plugin = Object.values(window.powerbi.visuals.plugins)[0];
+  window.visual = plugin.create({ element, host });
+  window.doUpdate = function (objects, type) {
+    window.__lastObjects = objects;
+    window.__updates = (window.__updates || 0) + 1;
+    window.visual.update({
+      viewMode: window.__viewMode === undefined ? 1 : window.__viewMode,
+      viewport: { width: 900, height: 560 },
+      dataViews: [window.makeDataView(objects)],
+      type: type || 62
+    });
+  };
+</script>
+</body>
+</html>
