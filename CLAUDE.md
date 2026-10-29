@@ -16,10 +16,11 @@ npm run lint
 ```
 
 - `--all-locales` is required: powerbi-visuals-utils-formattingutils 7 ships ESM locale data that the default locale-trimming loader in powerbi-visuals-tools 7.2.1 can't parse.
+- Test before every push or release (John's rule): `npm run preview`, `node tests/check.mjs`, `node tests/live.mjs`, all passing.
 - Release: bump `version` in **pbiviz.json (two places)** and **package.json** (`x.y.z.0`), `npm run package`, commit, push, then
   `gh release create vX.Y.Z dist/pbiLabelMap…X.Y.Z.0.pbiviz --title "Label Map X.Y.Z" --notes "…" --latest`
   (upload it as `LabelMap-X.Y.Z.pbiviz`, e.g. copy/rename first).
-- `~/Documents/frw/plm-release/` holds the old bundle-based publish flow (`publish.sh`) used when only a cloud session could build. With Claude Code here, plain git + gh is simpler.
+- `~/Documents/frw/plm-release/` holds the old bundle-based publish flow (`publish.sh`) used when only a cloud session could build, plus every `LabelMap-X.Y.Z.pbiviz` and `notes-X.Y.Z.md`. With Claude Code here, use plain git + gh, but keep copying each release's `.pbiviz` and notes there. Don't run `publish.sh` now: it pushes local `main` and creates the release for the newest `.pbiviz` in that folder.
 - In Power BI: Visualizations → … → Import a visual from a file. Tenant has "certified visuals only" risk; the fix is the admin adding it to Organizational visuals.
 
 ## Stack
@@ -31,7 +32,7 @@ powerbi-visuals-tools 7.2.1, API 5.11.1, powerbi-visuals-utils-formattingmodel 6
 - `capabilities.json`: data roles (Location ×5, Latitude, Longitude, Legend, Size, Label value, Bubble text, Tooltips), table mapping (top 30000), format objects, WebAccess privileges (CARTO, OSM, arcgisonline, atlas.microsoft.com). A tile/geocoder domain not listed here is blocked by Power BI.
 - `src/visual.ts`: everything at runtime. `update` → `renderData` → `parse` (rows → points, uses `locate`) → `renderPoints` → legend, fit, notices, declutter. Also legend colors, legend filter, region names, re-lookup button.
 - `src/places.ts`: `analyzeLocation(text)` reads country, state/province, US ZIP, Canadian postal code, street, town, PO boxes from the Location text. Pure; unit-testable with esbuild.
-- `src/geocoder.ts`: Nominatim (1 req/s, structured "attempts" in order) and Azure Maps batch geocoding, checks (state ISO code, distance), session misses, saved cache.
+- `src/geocoder.ts`: Nominatim (1 req/s, structured "attempts" in order) and Azure Maps batch geocoding, checks (OpenStreetMap: state ISO code + distance; Azure: country filter + distance only, no state check), session misses, saved cache.
 - `src/postal.ts` + `src/data/caFsa.json`: Canadian postal-area (first 3 chars) centres, 1,610 entries.
 - `src/usZip.ts` + `src/data/usZip.json`: ~42,000 US ZIP centres, packed 8 base-36 chars per ZIP.
 - `src/regions.ts` + `src/data/regions.json`: US states and Canadian provinces: codes, names, aliases (PQ, Que., B.C., Nfld. …), label points, bounding boxes, postal-letter → province.
@@ -72,12 +73,15 @@ Location is several fields joined with ", " in field order, typically Country, S
 
 ## Testing
 
-Nothing has been tested inside real Power BI by Claude; all checks ran in headless Chromium with a fake Power BI host and mocked Nominatim/Azure (`tests/harness.html`, `tests/check.mjs`). Real OpenStreetMap/tiles were never reachable from the cloud sandbox, so real-service behaviour needs a look in Power BI Desktop.
+Nothing has been tested inside real Power BI by Claude (Desktop is Windows-only; this Mac can't run it). All checks run in headless Chromium with a fake Power BI host (`tests/harness.html`):
+- `tests/check.mjs`: mocked Nominatim, exact expected positions, legend filter, re-lookup button, region names. Fast and repeatable.
+- `tests/live.mjs`: the same rows against the real Nominatim (`harness.html?live`) and the keyless tile servers (Esri ×3, OSM), ±0.3° and the expected "Placed by". About 15 Nominatim requests; run by hand before a release, not in a loop. Screenshots in `.tmp/live/`.
 
 ```bash
 npm run preview                      # builds preview/visual.js used by the harness
 npx playwright install chromium      # once
 node tests/check.mjs                 # prints PASS/FAIL per check
+node tests/live.mjs                  # real services; needs internet
 ```
 
 For parser-only checks, bundle a small script importing `src/places.ts` with esbuild (`--loader:.json=json`) and run it with node.

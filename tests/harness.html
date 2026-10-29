@@ -1,5 +1,6 @@
 <!doctype html>
-<!-- Test page: the built visual (npm run preview) with a fake Power BI host and mocked Nominatim. Driven by tests/check.mjs. -->
+<!-- Test page: the built visual (npm run preview) with a fake Power BI host and mocked Nominatim. Driven by tests/check.mjs.
+     harness.html?live uses the real Nominatim instead (tests/live.mjs). -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -89,9 +90,23 @@
     "|minneapolis|minnesota": [{ lat: 44.9778, lon: -93.2650, iso: "US-MN" }],
     "|ontario|california": [{ lat: 34.0633, lon: -117.6509, iso: "US-CA" }]
   };
+  const LIVE = new URLSearchParams(location.search).has("live");
+  const realFetch = window.fetch.bind(window);
   window.__fetchLog = [];
   window.fetch = async function (url, init) {
     window.__fetchLog.push({ url: String(url), method: (init && init.method) || "GET" });
+    if (LIVE) {
+      const t0 = Date.now();
+      const entry = window.__fetchLog[window.__fetchLog.length - 1];
+      try {
+        const res = await realFetch(url, init);
+        Object.assign(entry, { status: res.status, ms: Date.now() - t0 });
+        return res;
+      } catch (e) {
+        Object.assign(entry, { status: "network error", ms: Date.now() - t0 });
+        throw e;
+      }
+    }
     await new Promise(r => setTimeout(r, 20));
     if (String(url).startsWith("https://nominatim.openstreetmap.org/search")) {
       const u = new URL(url);
